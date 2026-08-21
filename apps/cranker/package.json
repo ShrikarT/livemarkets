@@ -1,0 +1,19 @@
+{
+	"name": "@livemarkets/cranker",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Permissionless matcher, series poker and house maker for LiveMarkets",
+	"scripts": {
+		"start": "tsx --env-file-if-exists=../../.env src/index.ts",
+		"once": "tsx --env-file-if-exists=../../.env src/index.ts --once",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"viem": "^2.21.54"
+	},
+	"devDependencies": {
+		"tsx": "^4.19.2",
+		"typescript": "^5.6.3"
+	}
+}
