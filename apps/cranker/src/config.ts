@@ -34,7 +34,7 @@ function loadDeployment(): Deployment {
 	try {
 		return JSON.parse(readFileSync(deploymentPath, "utf8")) as Deployment
 	} catch {
-		throw new Error(`no deployment at ${deploymentPath} \\u2014 run \\`npm run deploy\\` first`)
+		throw new Error(`no deployment at ${deploymentPath} \u2014 run \`npm run deploy\` first`)
 	}
 }
 
