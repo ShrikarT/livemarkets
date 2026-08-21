@@ -257,6 +257,7 @@ async function main() {
 				stats.passes++
 				if (stats.passes % 20 === 0) console.log(`\\u2192 block ${to} \\u00b7 ${JSON.stringify(stats)}`)
 			}
+
 			// Caught up? Breathe. Behind? Go straight round again.
 			if (to >= head) await new Promise((r) => setTimeout(r, POLL_MS))
 		} catch (err) {
