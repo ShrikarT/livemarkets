@@ -67,7 +67,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ address: string
 
 			const send = (event: string, data: unknown) => {
 				if (closed) return
-				controller.enqueue(encoder.encode(`event: ${event}\\ndata: ${JSON.stringify(data)}\\n\\n`))
+				controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
 			}
 
 			const shutdown = () => {
@@ -107,7 +107,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ address: string
 			await tick()
 			timer = setInterval(() => void tick(), POLL_MS)
 			beat = setInterval(() => {
-				if (!closed) controller.enqueue(encoder.encode(": ping\\n\\n"))
+				if (!closed) controller.enqueue(encoder.encode(": ping\n\n"))
 			}, HEARTBEAT_MS)
 			// A market lasts a minute. A stream that has been open five is a leak.
 			life = setTimeout(shutdown, MAX_LIFETIME_MS)

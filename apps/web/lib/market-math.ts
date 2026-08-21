@@ -211,7 +211,7 @@ export function formatWad(v: bigint, decimals = 2): string {
 /** "1.5" -> 1500000000000000000n. Throws on anything that is not a plain decimal. */
 export function parseWad(input: string): bigint {
 	const s = input.trim()
-	if (!/^\\d*\\.?\\d*$/.test(s) || s === "" || s === ".") return 0n
+	if (!/^\d*\.?\d*$/.test(s) || s === "" || s === ".") return 0n
 	const [w, f = ""] = s.split(".")
 	const frac = f.padEnd(18, "0").slice(0, 18)
 	return BigInt(w || "0") * WAD + BigInt(frac || "0")

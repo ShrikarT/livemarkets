@@ -18,7 +18,7 @@ function normalise(email: string): string | null {
 	const e = email.trim().toLowerCase()
 	// Deliberately permissive: the point is to catch typos, not to police addresses.
 	if (e.length < 5 || e.length > 254) return null
-	if (!/^[^@\\s]+@[^@\\s.]+\\.[^@\\s]+$/.test(e)) return null
+	if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(e)) return null
 	return e
 }
 
@@ -36,7 +36,7 @@ export async function POST(req: Request) {
 	// 10 signups per hour per IP. Generous for a human, useless for a script.
 	const ip = await hashIp(clientIp(req))
 	if (!(await rateLimit(`waitlist:ip:${ip}`, 10, 3_600))) {
-		return Response.json({ error: "too many signups from here \\u2014 try again later" }, { status: 429 })
+		return Response.json({ error: "too many signups from here \u2014 try again later" }, { status: 429 })
 	}
 
 	const isNew = await addOnce(MEMBERS, email)
