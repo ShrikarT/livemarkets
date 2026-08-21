@@ -1,0 +1,162 @@
+"""
+Generate the cost-parity vectors shared by the Solidity and the TypeScript.
+
+    python3 sim/gen_vectors.py
+
+Writes test/vectors/cost-vectors.json, which is consumed by:
+  - test/Vectors.t.sol        (asserts the CONTRACT agrees with the file)
+  - apps/web/lib/market-math.test.ts (asserts the BROWSER agrees with the file)
+
+So the file is the contract between the two. If either side drifts, one of those
+two tests fails and the order ticket can never quietly lie about cost.
+
+The vectors are deliberately nasty: primes, 1 wei, values just under and just over
+the dust floor, and share counts that do not divide evenly by any tick price.
+"""
+
+import json
+import pathlib
+import random
+
+from model import MIN_SHARES, NUM_TICKS, ONE, Market, Outcome, cost, leg_price, mul_div_down, mul_div_up, price
+
+OUT = pathlib.Path(__file__).resolve().parents[1] / "test" / "vectors" / "cost-vectors.json"
+WAD = 10**18
+
+
+def build() -> dict:
+    rnd = random.Random(20260821)  # fixed seed: vectors are reproducible
+
+    share_samples: list[int] = [
+        1,
+        2,
+        3,
+        7,
+        19,
+        9_999,
+        10_000,
+        10_001,
+        MIN_SHARES - 1,
+        MIN_SHARES,
+        MIN_SHARES + 1,
+        WAD,
+        WAD + 1,
+        WAD - 1,
+        7 * WAD // 3,
+        7_777_777_777_777_777,
+        123_456_789_987_654_321,
+        999_999_999_999_999_999,
+        100 * WAD,
+        60 * WAD,
+    ]
+    while len(share_samples) < 240:
+        share_samples.append(rnd.randrange(1, 500 * WAD))
+
+    # Flat, order-defined arrays. Both Solidity and TypeScript read these with two
+    # bulk parses instead of 9,120 JSON-path lookups (in forge, per-path lookups
+    # re-parse the whole file each time and turn this into a multi-minute test).
+    # ORDER: tick asc -> isYes true then false -> shareSamples index asc.
+    costs: list[str] = []
+    for tick in range(NUM_TICKS):
+        for is_yes in (True, False):
+            for shares in share_samples:
+                costs.append(str(cost(tick, shares, is_yes)))
+
+    # payout / fee / void-refund vectors
+    payouts = []
+    for tick in range(NUM_TICKS):
+        for shares in [1, MIN_SHARES, WAD, 60 * WAD, 7_777_777_777_777_777]:
+            for outcome in ("yes", "no", "void"):
+                y, n = shares, shares // 2
+                if outcome == "yes":
+                    gross = y
+                elif outcome == "no":
+                    gross = n
+                else:
+                    gross = mul_div_down(y, leg_price(tick, True), ONE) + mul_div_down(
+                        n, leg_price(tick, False), ONE
+                    )
+                fee = 0 if outcome == "void" else mul_div_down(gross, 100, ONE)
+                payouts.append(
+                    {
+                        "tick": tick,
+                        "yesShares": str(y),
+                        "noShares": str(n),
+                        "outcome": outcome,
+                        "feeBps": 100,
+                        "gross": str(gross),
+                        "fee": str(fee),
+                        "net": str(gross - fee),
+                    }
+                )
+
+    # refund vectors: partially filled orders at awkward sizes
+    refunds = []
+    for tick in (0, 3, 9, 12, 18):
+        for is_yes in (True, False):
+            for shares in [WAD, 7_777_777_777_777_777, 123_456_789_987_654_321]:
+                for num, den in ((0, 1), (1, 3), (1, 2), (2, 3), (1, 1)):
+                    filled = shares * num // den
+                    paid = mul_div_up(shares, leg_price(tick, is_yes), ONE)
+                    used = mul_div_up(filled, leg_price(tick, is_yes), ONE)
+                    refunds.append(
+                        {
+                            "tick": tick,
+                            "isYes": is_yes,
+                            "shares": str(shares),
+                            "filled": str(filled),
+                            "paid": str(paid),
+                            "refund": str(0 if filled >= shares else paid - used),
+                        }
+                    )
+
+    # implied probability vectors, including the empty book
+    implied = []
+    for seed in range(24):
+        rnd2 = random.Random(seed)
+        m = Market(open_until=10**9, resolve_after=2 * 10**9)
+        for _ in range(rnd2.randrange(0, 12)):
+            t = rnd2.randrange(NUM_TICKS)
+            is_yes = rnd2.random() < 0.5
+            sh = rnd2.randrange(MIN_SHARES, 10 * WAD)
+            m.deposit("a", cost(t, sh, is_yes))
+            m.place("a", t, sh, is_yes)
+        implied.append(
+            {
+                "book": [
+                    {"openYes": str(t.open_yes), "openNo": str(t.open_no), "matched": str(t.matched)}
+                    for t in m.ticks
+                ],
+                "impliedBps": str(m.implied_bps()),
+            }
+        )
+
+    return {
+        "_comment": (
+            "Generated by packages/contracts/sim/gen_vectors.py. "
+            "Regenerate from the contract itself with: forge test --mt test_writeVectors"
+        ),
+        "one": str(ONE),
+        "numTicks": NUM_TICKS,
+        "minShares": str(MIN_SHARES),
+        "tickPrices": [str(price(i)) for i in range(NUM_TICKS)],
+        "_order": "costs[]: tick asc, then isYes=true then isYes=false, then shareSamples index asc",
+        "shareSamples": [str(s) for s in share_samples],
+        "legPrices": [[str(leg_price(t, True)), str(leg_price(t, False))] for t in range(NUM_TICKS)],
+        "costs": costs,
+        "payout": payouts,
+        "refund": refunds,
+        "implied": implied,
+    }
+
+
+if __name__ == "__main__":
+    data = build()
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(data, indent=1) + "\n")
+    print(f"wrote {OUT.relative_to(OUT.parents[2])}")
+    print(f"  cost vectors    {len(data['costs']):,}")
+    print(f"  payout vectors  {len(data['payout']):,}")
+    print(f"  refund vectors  {len(data['refund']):,}")
+    print(f"  implied vectors {len(data['implied']):,}")
+    _ = Outcome  # keep the import honest
