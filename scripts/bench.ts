@@ -258,7 +258,8 @@ async function parallelFill(market: Address): Promise<Timing> {
 	const wall = performance.now() - t0
 	const gas = receipts.reduce((a, r) => a + r.gasUsed, 0n)
 	const blocks = new Set(receipts.map((r) => r.blockNumber.toString()))
-	console.log(`   \u2192 19 transactions landed across ${blocks.size} block(s)`)
+
+	console.log(`   \\u2192 19 transactions landed across ${blocks.size} block(s)`)
 	return { wall, gas, txs: NUM_TICKS }
 }
 
@@ -310,64 +311,64 @@ function persist(rows: Array<{ label: string; sequential: string; parallel: stri
 	const source = readFileSync(benchConfigPath, "utf8")
 	const body = [
 		"export const bench: BenchResults = {",
-		"\tmeasured: true,",
-		`\tchain: ${JSON.stringify(chain.name)},`,
-		`\ttakenAt: ${JSON.stringify(new Date().toISOString())},`,
-		`\tcommit: ${JSON.stringify(commit())},`,
-		"\trows: [",
+		"\\tmeasured: true,",
+		`\\tchain: ${JSON.stringify(chain.name)},`,
+		`\\ttakenAt: ${JSON.stringify(new Date().toISOString())},`,
+		`\\tcommit: ${JSON.stringify(commit())},`,
+		"\\trows: [",
 		...rows.map(
 			(r) =>
-				`\t\t{\n\t\t\tlabel: ${JSON.stringify(r.label)},\n\t\t\tsequential: ${JSON.stringify(
+				`\\t\\t{\\n\\t\\t\\tlabel: ${JSON.stringify(r.label)},\\n\\t\\t\\tsequential: ${JSON.stringify(
 					r.sequential,
-				)},\n\t\t\tparallel: ${JSON.stringify(r.parallel)},${
-					r.note ? `\n\t\t\tnote: ${JSON.stringify(r.note)},` : ""
-				}\n\t\t},`,
+				)},\\n\\t\\t\\tparallel: ${JSON.stringify(r.parallel)},${
+					r.note ? `\\n\\t\\t\\tnote: ${JSON.stringify(r.note)},` : ""
+				}\\n\\t\\t},`,
 		),
-		"\t],",
+		"\\t],",
 		"}",
-	].join("\n")
+	].join("\\n")
 
-	const next = source.replace(/export const bench: BenchResults = \{[\s\S]*?\n\}/, body)
+	const next = source.replace(/export const bench: BenchResults = \\{[\\s\\S]*?\\n\\}/, body)
 	if (next === source) throw new Error("could not find the bench export to rewrite")
 	writeFileSync(benchConfigPath, next)
-	console.log(`\nwrote ${benchConfigPath}`)
+	console.log(`\\nwrote ${benchConfigPath}`)
 }
 
 async function main() {
 	const balance = await pub.getBalance({ address: account.address })
-	console.log(`bench \u00b7 ${account.address} \u00b7 ${(Number(balance) / 1e18).toFixed(3)} MON`)
-	if (balance < 10n ** 18n) throw new Error("need at least 1 MON \u2014 https://faucet.monad.xyz")
+	console.log(`bench \\u00b7 ${account.address} \\u00b7 ${(Number(balance) / 1e18).toFixed(3)} MON`)
+	if (balance < 10n ** 18n) throw new Error("need at least 1 MON \\u2014 https://faucet.monad.xyz")
 
-	console.log("\n1/4 sequential: 19 levels, one transaction at a time")
+	console.log("\\n1/4 sequential: 19 levels, one transaction at a time")
 	const mA = await freshMarket("sequential")
 	await seed(mA, marketAbi)
 	const a = await sequentialFill(mA)
-	console.log(`   ${ms(a.wall)} \u00b7 ${a.gas} gas \u00b7 ${a.txs} txs`)
+	console.log(`   ${ms(a.wall)} \\u00b7 ${a.gas} gas \\u00b7 ${a.txs} txs`)
 
-	console.log("\n2/4 parallel: 19 levels, all transactions at once")
+	console.log("\\n2/4 parallel: 19 levels, all transactions at once")
 	const mB = await freshMarket("parallel")
 	await seed(mB, marketAbi)
 	const b = await parallelFill(mB)
-	console.log(`   ${ms(b.wall)} \u00b7 ${b.gas} gas \u00b7 ${b.txs} txs`)
+	console.log(`   ${ms(b.wall)} \\u00b7 ${b.gas} gas \\u00b7 ${b.txs} txs`)
 
-	console.log("\n3/4 batched: 19 levels inside one transaction")
+	console.log("\\n3/4 batched: 19 levels inside one transaction")
 	const mC = await freshMarket("batched")
 	await seed(mC, marketAbi)
 	const c = await batchedFill(mC)
-	console.log(`   ${ms(c.wall)} \u00b7 ${c.gas} gas \u00b7 ${c.txs} tx`)
+	console.log(`   ${ms(c.wall)} \\u00b7 ${c.gas} gas \\u00b7 ${c.txs} tx`)
 
 	let d: Timing | null = null
 	if (deployment.naiveBook && !/^0x0{40}$/.test(deployment.naiveBook)) {
-		console.log("\n4/4 naive: the same fills against one shared book")
+		console.log("\\n4/4 naive: the same fills against one shared book")
 		try {
 			await seed(deployment.naiveBook, naiveAbi)
 			d = await naiveFill(deployment.naiveBook)
-			console.log(`   ${ms(d.wall)} \u00b7 ${d.gas} gas \u00b7 ${d.txs} tx`)
+			console.log(`   ${ms(d.wall)} \\u00b7 ${d.gas} gas \\u00b7 ${d.txs} tx`)
 		} catch (err) {
 			console.warn("   skipped:", err instanceof Error ? err.message.slice(0, 120) : err)
 		}
 	} else {
-		console.log("\n4/4 naive: skipped (NaiveBook not deployed)")
+		console.log("\\n4/4 naive: skipped (NaiveBook not deployed)")
 	}
 
 	const speedup = a.wall / b.wall
@@ -376,13 +377,13 @@ async function main() {
 			label: "fill all 19 price levels",
 			sequential: ms(a.wall),
 			parallel: ms(b.wall),
-			note: `${speedup.toFixed(1)}\u00d7 faster wall clock for identical work`,
+			note: `${speedup.toFixed(1)}\\u00d7 faster wall clock for identical work`,
 		},
 		{
 			label: "gas for that same fill",
 			sequential: `${a.gas.toLocaleString()}`,
 			parallel: `${b.gas.toLocaleString()}`,
-			note: "within rounding \u2014 parallelism is a latency win, not a gas trick",
+			note: "within rounding \\u2014 parallelism is a latency win, not a gas trick",
 		},
 		{
 			label: "transactions to fill a round",
@@ -394,7 +395,7 @@ async function main() {
 			label: "one batched transaction instead",
 			sequential: ms(a.wall),
 			parallel: ms(c.wall),
-			note: `batching hides round trips but still executes serially \u00b7 ${c.gas.toLocaleString()} gas`,
+			note: `batching hides round trips but still executes serially \\u00b7 ${c.gas.toLocaleString()} gas`,
 		},
 	]
 	if (d) {
@@ -406,7 +407,7 @@ async function main() {
 		})
 	}
 
-	console.log(`\nresult: ${ms(a.wall)} \u2192 ${ms(b.wall)} (${speedup.toFixed(1)}\u00d7)`)
+	console.log(`\\nresult: ${ms(a.wall)} \\u2192 ${ms(b.wall)} (${speedup.toFixed(1)}\\u00d7)`)
 	persist(rows)
 }
 
