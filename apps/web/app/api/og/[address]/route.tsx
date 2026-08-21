@@ -28,15 +28,15 @@ const ULTRA = "#1B3FD1"
 const RISO = "#D6452B"
 const MUTED = "#7A776E"
 
-const SPARK = " \\u2581\\u2582\\u2583\\u2584\\u2585\\u2586\\u2587\\u2588"
+const SPARK = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
 
 function sparkline(levels: readonly TickLevel[]): string {
 	const weights = levels.map((l) => l.openYes + l.openNo + l.matched * 2n)
 	const peak = weights.reduce((a, b) => (b > a ? b : a), 0n)
-	if (peak === 0n) return "\\u00b7".repeat(levels.length || 19)
+	if (peak === 0n) return "\u00b7".repeat(levels.length || 19)
 	const top = BigInt(SPARK.length - 1)
 	return weights
-		.map((w) => (w === 0n ? "\\u00b7" : SPARK[Number((w * top) / peak < 1n ? 1n : (w * top) / peak)]))
+		.map((w) => (w === 0n ? "\u00b7" : SPARK[Number((w * top) / peak < 1n ? 1n : (w * top) / peak)]))
 		.join("")
 }
 
@@ -45,7 +45,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ address: strin
 
 	let question = brand.headline
 	let implied = "0.50"
-	let spark = "\\u00b7".repeat(19)
+	let spark = "\u00b7".repeat(19)
 	let volume = "0"
 	let state = "live"
 
