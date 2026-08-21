@@ -254,7 +254,7 @@ ROOM = """
     <span class="label" style="letter-spacing:.28em;color:var(--fg)">LIVEMARKETS</span>
     <span class="badge">single resolver</span>
   </div>
-  <nav style="display:flex;gap:var(--s4)"><span class="label">portfolio</span><span class="label">test MON</span></nav>
+  <nav style="display:flex;gap:var(--s4)"><span class="label">test MON</span></nav>
 </header>
 
 <main class="wrap" style="padding-block:var(--s6)">
