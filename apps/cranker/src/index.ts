@@ -103,7 +103,7 @@ async function pokeSeries(pub: PublicClient, wallet: WalletClient, account: Addr
 	)
 	const ok = results.filter((r) => r.status === "fulfilled").length
 	stats.pokes += ok
-	if (ok) log(`poked ${ok}/${due.length} series \\u2192 new rounds open`)
+	if (ok) log(`poked ${ok}/${due.length} series \u2192 new rounds open`)
 }
 
 /**
@@ -253,7 +253,7 @@ async function main() {
 	const wallet = createWalletClient({ account, chain, transport: http(config.rpcUrl) })
 
 	const balance = await pub.getBalance({ address: account.address })
-	log(`cranker ${account.address} \\u00b7 ${(Number(balance) / 1e18).toFixed(3)} MON \\u00b7 factory ${config.factory}`)
+	log(`cranker ${account.address} \u00b7 ${(Number(balance) / 1e18).toFixed(3)} MON \u00b7 factory ${config.factory}`)
 	if (balance === 0n) {
 		console.error("cranker has no MON. Fund it at https://faucet.monad.xyz and restart.")
 		process.exit(1)
@@ -263,7 +263,7 @@ async function main() {
 	const stop = () => {
 		if (stopping) process.exit(0)
 		stopping = true
-		log("stopping \\u2014 stats:", JSON.stringify(stats))
+		log("stopping \u2014 stats:", JSON.stringify(stats))
 	}
 	process.on("SIGINT", stop)
 	process.on("SIGTERM", stop)
