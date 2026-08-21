@@ -28,7 +28,7 @@ const derivers: Deriver[] = [
 	{
 		// "Next block above 2M gas?" / "next block over 2,000,000 gas"
 		name: "block-gas",
-		match: (q) => q.match(/block\\s+(?:above|over)\\s+([\\d.,]+)\\s*(m|k)?\\s*gas/i),
+		match: (q) => q.match(/block\s+(?:above|over)\s+([\d.,]+)\s*(m|k)?\s*gas/i),
 		decide: async (pub, m) => {
 			const raw = Number(m[1]!.replace(/,/g, ""))
 			const unit = (m[2] ?? "").toLowerCase()
@@ -40,7 +40,7 @@ const derivers: Deriver[] = [
 	{
 		// "Will block N be above 2M gas?" — a specific, already-final block
 		name: "specific-block-gas",
-		match: (q) => q.match(/block\\s+#?(\\d{4,})\\b.*?(?:above|over)\\s+([\\d.,]+)\\s*(m|k)?\\s*gas/i),
+		match: (q) => q.match(/block\s+#?(\d{4,})\b.*?(?:above|over)\s+([\d.,]+)\s*(m|k)?\s*gas/i),
 		decide: async (pub, m) => {
 			const number = BigInt(m[1]!)
 			const raw = Number(m[2]!.replace(/,/g, ""))
@@ -60,7 +60,7 @@ const derivers: Deriver[] = [
 	{
 		// "More than N transactions in the next block?"
 		name: "block-txs",
-		match: (q) => q.match(/(?:more than|above|over)\\s+([\\d,]+)\\s+transactions?/i),
+		match: (q) => q.match(/(?:more than|above|over)\s+([\d,]+)\s+transactions?/i),
 		decide: async (pub, m) => {
 			const threshold = Number(m[1]!.replace(/,/g, ""))
 			const block = await pub.getBlock({ blockTag: "latest", includeTransactions: false })

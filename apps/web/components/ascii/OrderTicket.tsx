@@ -111,7 +111,7 @@ export function OrderTicket({
 						inputMode="decimal"
 						autoComplete="off"
 						value={raw}
-						onChange={(e) => setRaw(e.target.value.replace(/[^\\d.]/g, ""))}
+						onChange={(e) => setRaw(e.target.value.replace(/[^\d.]/g, ""))}
 						placeholder="0.00"
 					/>
 					<div style={{ display: "flex", gap: "var(--s2)", marginTop: "var(--s2)" }}>
