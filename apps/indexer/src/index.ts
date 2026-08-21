@@ -227,13 +227,13 @@ async function indexRange(from: bigint, to: bigint) {
 
 async function main() {
 	if (!process.env.DATABASE_URL) {
-		console.error("DATABASE_URL is not set. The indexer is optional \\u2014 the app reads live state from the chain")
+		console.error("DATABASE_URL is not set. The indexer is optional \u2014 the app reads live state from the chain")
 		console.error("directly and works without it. Set DATABASE_URL to enable history and the leaderboard.")
 		process.exit(1)
 	}
 
 	await loadKnown()
-	console.log(`indexer up \\u00b7 factory ${config.factory} \\u00b7 ${known.size} markets known`)
+	console.log(`indexer up \u00b7 factory ${config.factory} \u00b7 ${known.size} markets known`)
 
 	let stopping = false
 	process.on("SIGINT", () => {
@@ -255,7 +255,7 @@ async function main() {
 				await indexRange(from, to)
 				await writeCursor(to)
 				stats.passes++
-				if (stats.passes % 20 === 0) console.log(`\\u2192 block ${to} \\u00b7 ${JSON.stringify(stats)}`)
+				if (stats.passes % 20 === 0) console.log(`\u2192 block ${to} \u00b7 ${JSON.stringify(stats)}`)
 			}
 
 			// Caught up? Breathe. Behind? Go straight round again.

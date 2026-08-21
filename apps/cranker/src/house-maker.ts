@@ -104,7 +104,7 @@ export async function runHouseMaker(pub: PublicClient, markets: readonly Address
 	if (dailyLoss() >= config.houseMaker.maxDailyLossWei) {
 		// Loud, once per loop, because a silently disabled maker looks identical to
 		// a working one until you notice the books are empty.
-		console.warn("[maker] daily loss cap reached \\u2014 not quoting until tomorrow")
+		console.warn("[maker] daily loss cap reached \u2014 not quoting until tomorrow")
 		return
 	}
 
