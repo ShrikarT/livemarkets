@@ -80,7 +80,7 @@ def hero(cols=118, rows=14, t=0.0):
             idx = max(0, min(len(RAMP) - 1, int(level * (len(RAMP) - 1))))
             line.append(RAMP[idx])
         out.append("".join(line))
-    return "\\n".join(out)
+    return "\n".join(out)
 
 
 SHARD_DIAGRAM = """      one question              nineteen shards                 one settlement
@@ -124,7 +124,7 @@ def ladder():
             f'<td class="num muted" style="text-align:right">{m or "·"}</td>'
             '</tr>'
         )
-    return "\\n".join(rows)
+    return "\n".join(rows)
 
 
 SHELL = """<!doctype html>
