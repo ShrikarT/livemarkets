@@ -19,13 +19,16 @@ import { FaucetButton } from "./FaucetButton"
  *   /app is an exact match while its children are prefix matches, so being on
  *   /app/rounds does not light up "live" as well.
  *
- *   There is no leaderboard link. The page does not exist yet, and a nav that
- *   links to a 404 is worse than a nav with one fewer item.
+ *   THIS LIST ONLY CONTAINS ROUTES THAT EXIST. A nav that links to a 404 is
+ *   worse than a nav with one fewer item: the dead link costs the user a page
+ *   load and some trust, while the missing one costs them nothing they knew
+ *   about. Uncomment each line as its page lands -- do not add it in advance.
  */
-const LINKS = [
+const LINKS: Array<{ href: string; label: string; exact: boolean }> = [
 	{ href: "/app", label: "live", exact: true },
-	{ href: "/app/rounds", label: "all rounds", exact: false },
-	{ href: "/app/portfolio", label: "portfolio", exact: false },
+	// { href: "/app/rounds", label: "all rounds", exact: false },
+	// { href: "/app/portfolio", label: "portfolio", exact: false },
+	// { href: "/app/leaderboard", label: "leaderboard", exact: false },
 ]
 
 export function AppNav() {
@@ -48,26 +51,34 @@ export function AppNav() {
 				{brand.wordmark}
 			</Link>
 
-			<nav style={{ display: "flex", gap: "var(--s3)", alignItems: "center" }}>
-				{LINKS.map((l) => {
-					const active = l.exact ? pathname === l.href : pathname.startsWith(l.href)
-					return (
-						<Link
-							key={l.href}
-							href={l.href}
-							className="label"
-							aria-current={active ? "page" : undefined}
-							style={{
-								color: active ? "var(--fg)" : undefined,
-								textDecoration: active ? "underline" : "none",
-								textUnderlineOffset: "4px",
-							}}
-						>
-							{l.label}
-						</Link>
-					)
-				})}
-			</nav>
+			{LINKS.length > 1 ? (
+				<nav style={{ display: "flex", gap: "var(--s3)", alignItems: "center" }}>
+					{LINKS.map((l) => {
+						const active = l.exact ? pathname === l.href : pathname.startsWith(l.href)
+						return (
+							<Link
+								key={l.href}
+								href={l.href}
+								className="label"
+								aria-current={active ? "page" : undefined}
+								style={{
+									color: active ? "var(--fg)" : undefined,
+									textDecoration: active ? "underline" : "none",
+									textUnderlineOffset: "4px",
+								}}
+							>
+								{l.label}
+							</Link>
+						)
+					})}
+				</nav>
+			) : (
+				/* With a single destination there is nothing to navigate between, so a
+				   one-item nav would be chrome pretending to be a menu. */
+				<Link href="/app" className="label" aria-current={pathname === "/app" ? "page" : undefined}>
+					live
+				</Link>
+			)}
 
 			<span className="badge" style={{ marginLeft: "auto" }}>
 				{brand.environmentLabel}
