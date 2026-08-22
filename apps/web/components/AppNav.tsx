@@ -26,8 +26,8 @@ import { FaucetButton } from "./FaucetButton"
  */
 const LINKS: Array<{ href: string; label: string; exact: boolean }> = [
 	{ href: "/app", label: "live", exact: true },
-	// { href: "/app/rounds", label: "all rounds", exact: false },
-	// { href: "/app/portfolio", label: "portfolio", exact: false },
+	{ href: "/app/rounds", label: "all rounds", exact: false },
+	{ href: "/app/portfolio", label: "portfolio", exact: false },
 	// { href: "/app/leaderboard", label: "leaderboard", exact: false },
 ]
 
