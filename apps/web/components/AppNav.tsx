@@ -22,13 +22,13 @@ import { FaucetButton } from "./FaucetButton"
  *   THIS LIST ONLY CONTAINS ROUTES THAT EXIST. A nav that links to a 404 is
  *   worse than a nav with one fewer item: the dead link costs the user a page
  *   load and some trust, while the missing one costs them nothing they knew
- *   about. Uncomment each line as its page lands -- do not add it in advance.
+ *   about. Add each line as its page lands -- never in advance.
  */
 const LINKS: Array<{ href: string; label: string; exact: boolean }> = [
 	{ href: "/app", label: "live", exact: true },
 	{ href: "/app/rounds", label: "all rounds", exact: false },
 	{ href: "/app/portfolio", label: "portfolio", exact: false },
-	// { href: "/app/leaderboard", label: "leaderboard", exact: false },
+	{ href: "/app/leaderboard", label: "leaderboard", exact: false },
 ]
 
 export function AppNav() {
