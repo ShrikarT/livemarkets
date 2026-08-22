@@ -5,10 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { Address } from "viem"
 import { useAccount, useWriteContract } from "wagmi"
 
-import { Countdown } from "../../../../components/ascii/Countdown"
+import { Clocks } from "../../../../components/ascii/Clocks"
 import { DepthLadder } from "../../../../components/ascii/DepthLadder"
 import { OrderTicket } from "../../../../components/ascii/OrderTicket"
 import { useToast } from "../../../../components/ascii/Toast"
+import { StreamPanel } from "../../../../components/stream/StreamPanel"
+import type { StreamMeta } from "../../../../lib/stream"
 import { explorerAddress, explorerTx } from "../../../../config/chains"
 import { protocol, trust } from "../../../../config/contracts"
 import { ERROR_COPY, OUTCOME, PHASE, marketAbi } from "../../../../lib/abi"
@@ -49,6 +51,14 @@ export type MarketRoomProps = {
 	initialPhase: number
 	initialOpenUntil: number
 	initialResolveAfter: number
+	/**
+	 * The live surface for this market, resolved on the server (§3.1).
+	 *
+	 * null is a real state, not an error: it means nobody authored a stream row,
+	 * which §3.2 says should never have got past /admin. The room says so plainly
+	 * instead of rendering an empty 16:9 hole.
+	 */
+	streamMeta: StreamMeta | null
 }
 
 export function MarketRoom(props: MarketRoomProps) {
@@ -169,7 +179,7 @@ export function MarketRoom(props: MarketRoomProps) {
 		<div className="theme-ink">
 			<header
 				className="wrap"
-				style={{ display: "flex", gap: "var(--s3)", alignItems: "center", paddingTop: "var(--s4)", flexWrap: "wrap" }}
+				style={ { display: "flex", gap: "var(--s3)", alignItems: "center", paddingTop: "var(--s4)", flexWrap: "wrap" } }
 			>
 				<Link className="btn btn-ghost" href="/app">
 					← All rounds
@@ -178,43 +188,81 @@ export function MarketRoom(props: MarketRoomProps) {
 					{address}
 				</a>
 				{stale ? <span className="badge no">rpc unreachable · showing last known book</span> : null}
-				<span className="badge" style={{ marginLeft: "auto" }} title={trust.detail}>
+				<span className="badge" style={ { marginLeft: "auto" } } title={trust.detail}>
 					{trust.label}
 				</span>
 			</header>
 
-			<main className="wrap" style={{ paddingTop: "var(--s5)", paddingBottom: "var(--s8)" }}>
-				<h1 className="display" style={{ fontSize: "var(--t-h2)", margin: "0 0 var(--s4)", maxWidth: "34ch" }}>
+			<main className="wrap" style={ { paddingTop: "var(--s5)", paddingBottom: "var(--s8)" } }>
+				<h1 className="display" style={ { fontSize: "var(--t-h2)", margin: "0 0 var(--s4)", maxWidth: "34ch" } }>
 					{snap?.question ?? props.initialQuestion}
 				</h1>
 
-				<div style={{ display: "flex", gap: "var(--s5)", alignItems: "baseline", flexWrap: "wrap" }}>
-					<div>
-						<div className="num" style={{ fontSize: "var(--t-h1)", lineHeight: 1 }}>
-							{formatBps(snap?.impliedBps ?? 5_000n)}
+				{/*
+				  TWO CLOCKS (§3.4), and both prices rather than one implied number.
+
+				  ORDERS CLOSE decides whether you may trade. RESOLVES decides when you
+				  get paid. A single countdown is what lets somebody on a delayed feed
+				  believe they still have time on a round whose outcome has already
+				  happened on a faster one.
+				*/}
+				<div style={ { display: "flex", gap: "var(--s6)", alignItems: "baseline", flexWrap: "wrap" } }>
+					<div style={ { display: "flex", gap: "var(--s5)", alignItems: "baseline" } }>
+						<div>
+							<div className="num yes" style={ { fontSize: "var(--t-h1)", lineHeight: 1 } }>
+								{formatBps(snap?.impliedBps ?? 5_000n)}
+							</div>
+							<span className="label">yes</span>
 						</div>
-						<span className="label">implied probability of yes</span>
+						<div>
+							<div className="num no" style={ { fontSize: "var(--t-h3)", lineHeight: 1 } }>
+								{formatBps(10_000n - (snap?.impliedBps ?? 5_000n))}
+							</div>
+							<span className="label">no</span>
+						</div>
 					</div>
-					<div style={{ minWidth: "260px", flex: 1 }}>
-						<Countdown
+					<div style={ { minWidth: "260px" } }>
+						<Clocks
 							phase={phase}
 							openUntil={snap?.openUntil ?? props.initialOpenUntil}
 							resolveAfter={snap?.resolveAfter ?? props.initialResolveAfter}
-							label={outcome !== OUTCOME.Unresolved ? `outcome: ${["", "yes", "no", "void"][outcome]}` : undefined}
+							resolvingStartsAt={props.streamMeta?.resolvingStartsAt}
+							windowSec={protocol.openSeconds}
+							size="stack"
+							outcomeLabel={outcome !== OUTCOME.Unresolved ? ["", "yes", "no", "void"][outcome] : undefined}
 						/>
 					</div>
 				</div>
 
-				<div
-					style={{
-						display: "grid",
-						gridTemplateColumns: "minmax(0, 1.4fr) minmax(300px, 1fr)",
-						gap: "var(--s5)",
-						marginTop: "var(--s6)",
-						alignItems: "start",
-					}}
-				>
-					<section>
+				{/*
+				  §3.3: 62/38, and the stream sits ABOVE the book in the same column
+				  rather than beside it. That is what keeps the book the primary object --
+				  the player is capped at 62% of the row, is never full-bleed, and the
+				  ladder is directly under it at the same width.
+				*/}
+				<div className="market-grid" style={ { marginTop: "var(--s6)" } }>
+					<section style={ { display: "grid", gap: "var(--s4)" } }>
+						{props.streamMeta ? (
+							/* On a phone this pins to the top so the picture stays visible while
+							   you scroll the book. It is dismissible and the choice persists. */
+							<div className="stream-sticky">
+								<StreamPanel meta={props.streamMeta} badge={open ? "live" : undefined} />
+							</div>
+						) : (
+							<div className="panel">
+								<div className="panel-head">
+									<span className="label">no live surface for this market</span>
+								</div>
+								<div className="panel-body">
+									<p className="label" style={ { margin: 0, lineHeight: 1.5 } }>
+										every market is meant to carry exactly one stream row and this one has none. the book
+										below is still live and both clocks are still authoritative, but a market nobody can watch
+										should not have been created. add one in /admin.
+									</p>
+								</div>
+							</div>
+						)}
+
 						<DepthLadder
 							levels={snap?.levels ?? []}
 							impliedBps={snap?.impliedBps ?? 5_000n}
@@ -228,7 +276,7 @@ export function MarketRoom(props: MarketRoomProps) {
 
 						{/* Anyone can crank. The reward is why this works without a
 						    privileged keeper. */}
-						<div style={{ display: "flex", gap: "var(--s3)", marginTop: "var(--s4)", flexWrap: "wrap" }}>
+						<div style={ { display: "flex", gap: "var(--s3)", marginTop: "var(--s4)", flexWrap: "wrap" } }>
 							<button
 								className="btn btn-ghost"
 								disabled={!isConnected || busy}
@@ -265,18 +313,22 @@ export function MarketRoom(props: MarketRoomProps) {
 						</div>
 					</section>
 
-					<aside style={{ display: "grid", gap: "var(--s4)" }}>
-						<OrderTicket
-							tick={tick}
-							isYes={isYes}
-							feeBps={protocol.feeBps}
-							balanceWei={snap?.balanceWei ?? 0n}
-							open={open}
-							busy={busy}
-							canSign={isConnected}
-							onSideChange={setIsYes}
-							onSubmit={onSubmit}
-						/>
+					<aside className="market-right">
+						{/* On a phone the ticket pins to the bottom edge, so a side can be taken
+						    without scrolling back past the book. */}
+						<div className="ticket-sticky">
+							<OrderTicket
+								tick={tick}
+								isYes={isYes}
+								feeBps={protocol.feeBps}
+								balanceWei={snap?.balanceWei ?? 0n}
+								open={open}
+								busy={busy}
+								canSign={isConnected}
+								onSideChange={setIsYes}
+								onSubmit={onSubmit}
+							/>
+						</div>
 
 						<div className="panel">
 							<div className="panel-head">
@@ -287,7 +339,7 @@ export function MarketRoom(props: MarketRoomProps) {
 							</div>
 							<div className="panel-body">
 								{positions.length === 0 ? (
-									<p className="label" style={{ margin: 0 }}>
+									<p className="label" style={ { margin: 0 } }>
 										{isConnected ? "Nothing filled yet at any price." : "Connect to see your fills. Watching needs no wallet."}
 									</p>
 								) : (
@@ -314,7 +366,7 @@ export function MarketRoom(props: MarketRoomProps) {
 								{claimable ? (
 									<button
 										className="btn btn-yes"
-										style={{ marginTop: "var(--s3)", width: "100%" }}
+										style={ { marginTop: "var(--s3)", width: "100%" } }
 										disabled={busy}
 										onClick={() =>
 											void send(
@@ -336,7 +388,7 @@ export function MarketRoom(props: MarketRoomProps) {
 								{snap && snap.balanceWei > 0n && !claimable ? (
 									<button
 										className="btn btn-ghost"
-										style={{ marginTop: "var(--s3)", width: "100%" }}
+										style={ { marginTop: "var(--s3)", width: "100%" } }
 										disabled={busy}
 										onClick={() =>
 											void send("Withdraw idle balance", () =>
@@ -355,7 +407,7 @@ export function MarketRoom(props: MarketRoomProps) {
 							</div>
 						</div>
 
-						<p className="label" style={{ margin: 0 }}>
+						<p className="label" style={ { margin: 0 } }>
 							One key decides this outcome ({trust.stage}). Fee is {protocol.feeBps / 100}% on winnings only, and
 							nothing is charged on a void.
 						</p>
