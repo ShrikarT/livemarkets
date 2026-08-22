@@ -6,11 +6,12 @@ import { usePathname } from "next/navigation"
 import { brand } from "../config/brand"
 import { AuthButton } from "./auth/AuthButton"
 import { FaucetButton } from "./FaucetButton"
+import { ReferralCapture } from "./ReferralCapture"
 
 /**
  * One nav for every /app surface.
  *
- * Three deliberate choices:
+ * Four deliberate choices:
  *
  *   The environment label is not decoration. "test funds only" has to be visible
  *   on every screen where money appears, because a testnet app that looks like a
@@ -23,12 +24,17 @@ import { FaucetButton } from "./FaucetButton"
  *   worse than a nav with one fewer item: the dead link costs the user a page
  *   load and some trust, while the missing one costs them nothing they knew
  *   about. Add each line as its page lands -- never in advance.
+ *
+ *   ReferralCapture lives here rather than on the invite page because this header
+ *   renders on every /app surface, and a referral link can point anywhere. It
+ *   draws nothing.
  */
 const LINKS: Array<{ href: string; label: string; exact: boolean }> = [
 	{ href: "/app", label: "live", exact: true },
 	{ href: "/app/rounds", label: "all rounds", exact: false },
 	{ href: "/app/portfolio", label: "portfolio", exact: false },
 	{ href: "/app/leaderboard", label: "leaderboard", exact: false },
+	{ href: "/app/invite", label: "invite", exact: false },
 ]
 
 export function AppNav() {
@@ -47,6 +53,8 @@ export function AppNav() {
 				borderBottom: "1px solid var(--line)",
 			}}
 		>
+			<ReferralCapture />
+
 			<Link href="/" className="display" style={{ textDecoration: "none", letterSpacing: "0.02em" }}>
 				{brand.wordmark}
 			</Link>
