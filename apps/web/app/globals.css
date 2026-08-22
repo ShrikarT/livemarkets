@@ -12,6 +12,21 @@
  *   - Radius maxes out at 2px. Nothing here is a pill.
  *   - No shadows, no glows, no glassmorphism, no gradients that are not duotone.
  *   - The character cell is a real unit. ASCII art has to land on a grid.
+ *
+ * V2 CHANGES. Palette, type stacks and type scale are untouched on purpose.
+ *   - The theme classes now PAINT the theme and FILL the viewport. In V1 `body`
+ *     referenced --bg/--fg, which are only ever declared on .theme-*, so both
+ *     resolved to a guaranteed-invalid value, fell back to transparent, and the
+ *     page rendered as a slab on white. That was the "does not align to the page"
+ *     bug, and it is one declaration.
+ *   - `font-size: var(--cell-w) / 1` is gone. It was a `font` shorthand fragment
+ *     sitting in a `font-size` property, so every browser dropped the whole line.
+ *   - Character counts are sized in `ch`, never in pixels-divided-by-eight. A 13px
+ *     mono glyph advances about 7.8px, and that 0.2px per column is the ragged
+ *     right edge.
+ *   - .plate and .halftone are for IMAGES. Never a text container.
+ *   - Anything that must stay on the grid gets a .ascii-scroll wrapper so it can
+ *     never force the page wider than the viewport.
  */
 
 :root {
@@ -32,8 +47,15 @@
 	--t-h1: 56px;
 
 	/* --------------------------------------------------------- the ASCII grid */
-	/* One character cell. The hero field, the depth ladder and the countdown are
-	   all measured in these, so they stay locked to each other. */
+	/*
+	 * PRE-MEASUREMENT DEFAULTS ONLY.
+	 *
+	 * Nothing may divide a pixel width by 8 to get a column count. The mono stack
+	 * resolves to a different font on every platform, so size character counts in
+	 * `ch` (see .ascii-block / .depth-ladder). Where a component genuinely needs
+	 * the pixel value, call measureCell() from lib/cell.ts, which overwrites these
+	 * two properties on the host with the measured truth.
+	 */
 	--cell-w: 8px;
 	--cell-h: 16px;
 
@@ -121,14 +143,23 @@ body {
 	padding: 0;
 }
 
+/*
+ * html paints the base colour so overscroll bounce, the area under a short page
+ * and the browser's own canvas never flash white. These two literals are the only
+ * place a palette value is repeated, and they are repeated because a custom
+ * property declared on .theme-* is not in scope on <html>.
+ */
 html {
+	background: #f2efe6;
 	-webkit-text-size-adjust: 100%;
 	text-size-adjust: 100%;
 }
 
+html:has(.theme-ink) {
+	background: #0b0b0c;
+}
+
 body {
-	background: var(--bg);
-	color: var(--fg);
 	font-family: var(--font-mono);
 	font-size: var(--t-body);
 	line-height: 1.5;
@@ -139,11 +170,18 @@ body {
 	   component has to remember. */
 	font-variant-numeric: tabular-nums;
 	font-feature-settings: "tnum" 1, "kern" 1, "liga" 0;
+
+	/*
+	 * DELETED IN V2: background: var(--bg); color: var(--fg);
+	 * Neither property exists at this level. The theme carriers below paint.
+	 */
 }
 
 img,
 svg,
-canvas {
+canvas,
+video,
+iframe {
 	display: block;
 	max-width: 100%;
 }
@@ -161,6 +199,42 @@ textarea {
 a {
 	color: inherit;
 	text-decoration: none;
+}
+
+/* ====================================================== the theme carriers */
+/*
+ * The element carrying .theme-paper / .theme-ink IS the page. It paints the
+ * background, sets the text colour, fills the window at minimum, and lays its
+ * children out in a column so a footer lands at the bottom of a short page
+ * instead of floating mid-screen.
+ */
+.theme-paper,
+.theme-ink {
+	background: var(--bg);
+	color: var(--fg);
+	min-height: 100dvh;
+	display: flex;
+	flex-direction: column;
+}
+
+/*
+ * Flex items default to min-width:auto, which lets one wide <pre> or <table>
+ * shove the whole page sideways and produce a horizontal scrollbar. Nothing here
+ * is allowed to do that; wide things get .ascii-scroll instead.
+ */
+.theme-paper > *,
+.theme-ink > * {
+	min-width: 0;
+}
+
+.theme-paper > main,
+.theme-ink > main {
+	flex: 1 0 auto;
+}
+
+.theme-paper > footer,
+.theme-ink > footer {
+	margin-top: auto;
 }
 
 /* ============================================================== typography */
@@ -337,12 +411,16 @@ h3.display {
 	white-space: nowrap;
 }
 
+.badge-live {
+	color: var(--no);
+	border-color: var(--no);
+}
+
 /* ==================================================================== ascii */
 /* Anything drawn out of characters. Locked to the cell grid, never selected by
    accident, never smoothed. */
 .ascii {
 	font-family: var(--font-mono);
-	font-size: var(--cell-w) / 1;
 	font-size: calc(var(--cell-h) * 0.8125); /* 13px at a 16px cell */
 	line-height: var(--cell-h);
 	letter-spacing: 0;
@@ -355,6 +433,38 @@ h3.display {
 .ascii-selectable {
 	user-select: text;
 	-webkit-user-select: text;
+}
+
+/* A block whose width is a character count. Sized by content, never by pixels. */
+.ascii-block {
+	width: max-content;
+}
+
+/*
+ * The depth ladder is 44 characters wide. In `ch`, which is one advance of "0" in
+ * the current font at the current size -- exactly the unit meant -- so it is
+ * correct on every platform without measuring anything. NOT 352px.
+ */
+.depth-ladder {
+	min-width: 44ch;
+}
+
+/*
+ * Every aligning block lives inside one of these. A <pre> with white-space:pre in
+ * a flex or grid child either overflows its parent or drags the parent wider than
+ * the viewport, and both look like a broken page.
+ */
+.ascii-scroll {
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	-webkit-overflow-scrolling: touch;
+	max-width: 100%;
+}
+
+.ascii-scroll > pre {
+	width: max-content;
+	min-width: 100%;
+	margin: 0;
 }
 
 /* The 1-character fill flash. When a resting order fills, the affected cell
@@ -423,21 +533,67 @@ h3.display {
 	font-variant-numeric: tabular-nums;
 }
 
+/* A book row holding one of your own resting orders. Colour already means side,
+   so "mine" is a marker plus a rule, never a fill. */
+.row-mine {
+	box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.mine-mark {
+	color: var(--accent);
+}
+
+.row-pick {
+	cursor: pointer;
+}
+
 /* ============================================================ duotone plate */
-/* Photographs and engravings are pushed through a two-colour separation so they
-   sit inside the palette instead of fighting it. Order matters: duotone first,
-   then halftone, then the ASCII layer on top. */
+/*
+ * SPEC-GAP (§4.3): the spec asks for className="plate" on the hero <img> and for
+ * .plate to carry filter: url(#duotone). The plates supplied with the spec are
+ * already duotone-separated bitmaps, so running #duotone across them a second
+ * time re-maps an already-mapped image and turns the blue to mud. Resolution:
+ * .plate does placement only, .duotone applies the filter and is there for raw
+ * photography. #duotone is in the DOM either way (see app/layout.tsx).
+ *
+ * Order, when both are used: duotone first, then halftone, then type on top.
+ * Neither class ever goes on an element that contains text.
+ */
+.plate-wrap {
+	position: relative;
+	/* Scope any blending to this stacking context instead of letting it reach the
+	   page root and multiply the whole document. */
+	isolation: isolate;
+}
+
 .plate {
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	object-position: center 30%;
+	pointer-events: none;
+	user-select: none;
+}
+
+.duotone {
 	filter: url(#duotone);
 	mix-blend-mode: multiply;
 }
 
-.theme-ink .plate {
+.theme-ink .duotone {
 	mix-blend-mode: screen;
 }
 
+/*
+ * A halftone screen. IMAGES ONLY. 0.6px dots on a 3px grid over 13px mono at
+ * DPR 2 is a moire generator, so this must never sit on a text container.
+ */
 .halftone {
 	position: relative;
+	isolation: isolate;
 }
 
 .halftone::after {
@@ -448,6 +604,108 @@ h3.display {
 	background-image: radial-gradient(circle at center, var(--fg) 0.6px, transparent 0.7px);
 	background-size: 3px 3px;
 	opacity: 0.14;
+}
+
+/* ================================================================== clocks */
+/*
+ * Two clocks, always, everywhere a market appears. ORDERS CLOSE decides whether
+ * you can trade; RESOLVES decides when you are paid. One number lets a viewer on
+ * a delayed feed trade into an outcome somebody else has already seen.
+ */
+.clocks {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s4);
+	align-items: baseline;
+}
+
+.clock {
+	display: grid;
+	gap: var(--s1);
+}
+
+.clock-value {
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+}
+
+.delay-note {
+	font-size: var(--t-micro);
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--fg-muted);
+}
+
+/* ================================================================== stream */
+/* HARD: the book is the primary object. The stream never exceeds 62% of the row,
+   is never full-bleed, and is never autoplaying with sound. */
+.market-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 62fr) minmax(320px, 38fr);
+	gap: var(--s5);
+	align-items: start;
+}
+
+.market-right {
+	position: sticky;
+	top: 0;
+	display: grid;
+	gap: var(--s4);
+}
+
+.frame-16x9 {
+	position: relative;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	background: var(--bg-2, transparent);
+	border: var(--rule-w) solid var(--line);
+	border-radius: var(--radius);
+	overflow: hidden;
+}
+
+.frame-16x9 > iframe,
+.frame-16x9 > video,
+.frame-16x9 > img {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	object-fit: cover;
+}
+
+.stream-collapsed {
+	display: flex;
+	align-items: center;
+	gap: var(--s2);
+	width: 100%;
+	padding: var(--s3) var(--s4);
+	border: var(--rule-w) solid var(--line);
+	border-radius: var(--radius);
+	background: transparent;
+	color: var(--fg-muted);
+	font-size: var(--t-micro);
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	cursor: pointer;
+}
+
+/* the sideways strip of other open rounds */
+.strip {
+	display: flex;
+	gap: var(--s3);
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	-webkit-overflow-scrolling: touch;
+	scroll-snap-type: x proximity;
+	padding-bottom: var(--s2);
+}
+
+.strip > * {
+	flex: 0 0 auto;
+	scroll-snap-align: start;
+	min-width: 15rem;
+	max-width: 22rem;
 }
 
 /* ================================================================ a11y */
@@ -474,10 +732,79 @@ h3.display {
 }
 
 /* ================================================================ mobile */
+/*
+ * Phone is the primary device: somebody watching a match is holding one. So the
+ * stream pins to the top, the book keeps the middle, and the ticket sticks to the
+ * bottom edge so a side can be taken without scrolling.
+ */
+@media (max-width: 1023px) {
+	.market-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.market-right {
+		position: static;
+	}
+
+	.stream-sticky {
+		position: sticky;
+		top: 0;
+		z-index: 20;
+		background: var(--bg);
+		padding-bottom: var(--s2);
+	}
+
+	.ticket-sticky {
+		position: sticky;
+		bottom: 0;
+		z-index: 20;
+		background: var(--bg);
+		padding-top: var(--s2);
+	}
+}
+
 @media (max-width: 720px) {
 	:root {
 		--t-h1: 34px;
 		--t-h2: 24px;
+		--t-h3: 19px;
+		--t-lead: 15px;
 		--gutter: 16px;
+	}
+
+	.depth-ladder {
+		min-width: 0;
+	}
+}
+
+@media (max-width: 640px) {
+	:root {
+		--t-h1: 30px;
+		--s8: 56px;
+		--s7: 36px;
+	}
+
+	.clocks {
+		gap: var(--s3);
+	}
+}
+
+/*
+ * The compact ladder. Nineteen rows at 44 characters does not fit 360px, so below
+ * 480 the two side-size columns collapse and the side is chosen in the ticket
+ * instead of in the book.
+ */
+@media (max-width: 480px) {
+	.ladder-side {
+		display: none;
+	}
+
+	.table th,
+	.table td {
+		padding: var(--s2);
+	}
+
+	.strip > * {
+		min-width: 13rem;
 	}
 }

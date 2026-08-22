@@ -9,6 +9,7 @@
 		"node": ">=20.11"
 	},
 	"workspaces": [
+		"packages/shared",
 		"apps/web",
 		"apps/cranker",
 		"apps/indexer"

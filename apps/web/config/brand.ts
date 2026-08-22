@@ -14,7 +14,7 @@ export const brand = {
 	handles: {
 		x: "@livemarkets",
 		xUrl: "https://x.com/livemarkets",
-		github: "https://github.com/livemarkets/livemarkets",
+		github: "https://github.com/ShrikarT/livemarkets",
 		farcaster: "@livemarkets",
 	},
 	// Shown in the header. Do not dress test money up as real money.
