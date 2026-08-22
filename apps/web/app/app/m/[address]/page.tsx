@@ -5,6 +5,8 @@ import { ToastProvider } from "../../../../components/ascii/Toast"
 import { brand } from "../../../../config/brand"
 import { readSnapshot } from "../../../../lib/market-client"
 import { formatBps } from "../../../../lib/market-math"
+import { getStreamMeta } from "../../../../lib/stream-registry"
+import type { StreamMeta } from "../../../../lib/stream"
 import { MarketRoom } from "./MarketRoom"
 
 /**
@@ -52,6 +54,30 @@ export default async function MarketPage({ params }: Params) {
 		notFound()
 	}
 
+	/*
+	 * The live surface is resolved HERE, on the server, for two reasons.
+	 *
+	 *   1. resolvingStartsAt gates tradeability (§3.4), so it has to be in the HTML
+	 *      with the first paint rather than arriving a second later. Otherwise there
+	 *      is a window in which the ticket looks open on a market that is shut.
+	 *   2. Both sources -- the indexer row and the committed template -- are
+	 *      server-side. The browser never learns STREAMS_API_URL.
+	 *
+	 * null is a real state, not a failure: §3.2 says a market without a stream row
+	 * should never have got past /admin, and the room says so plainly.
+	 */
+	let streamMeta: StreamMeta | null = null
+	try {
+		streamMeta = await getStreamMeta({
+			address: address as Address,
+			question: snap.question,
+			openUntil: snap.openUntil,
+		})
+	} catch {
+		// A stream row that cannot be read must never 500 a live market page.
+		streamMeta = null
+	}
+
 	return (
 		<ToastProvider>
 			<MarketRoom
@@ -60,6 +86,7 @@ export default async function MarketPage({ params }: Params) {
 				initialPhase={snap.phase}
 				initialOpenUntil={snap.openUntil}
 				initialResolveAfter={snap.resolveAfter}
+				streamMeta={streamMeta}
 			/>
 		</ToastProvider>
 	)
