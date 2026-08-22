@@ -1,21 +1,21 @@
+import { isAddress } from "viem"
 import { notFound } from "next/navigation"
-import { isAddress, type Address } from "viem"
 
+import { AppNav } from "../../../../components/AppNav"
+import { MarketRoom } from "../../../../components/MarketRoom"
 import { ToastProvider } from "../../../../components/ascii/Toast"
 import { brand } from "../../../../config/brand"
 import { readSnapshot } from "../../../../lib/market-client"
 import { formatBps } from "../../../../lib/market-math"
 import { getStreamMeta } from "../../../../lib/stream-registry"
-import type { StreamMeta } from "../../../../lib/stream"
-import { MarketRoom } from "./MarketRoom"
 
 /**
- * Market page.
+ * One market, server-rendered before hydration.
  *
- * The server does one snapshot read so the question, the price and the countdown
- * are in the HTML before any JavaScript runs — which also means a shared link
- * previews correctly and a slow connection still sees a real page. The room then
- * takes over and polls.
+ * The question, both prices and both countdowns are in the HTML, so the page is
+ * readable and shareable before any JavaScript runs. On a sixty-second market a
+ * client-side fetch waterfall would mean the round is a third over by the time
+ * the first price appears.
  */
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -24,21 +24,20 @@ type Params = { params: Promise<{ address: string }> }
 
 export async function generateMetadata({ params }: Params) {
 	const { address } = await params
-	if (!isAddress(address)) return { title: "Unknown market" }
+	if (!isAddress(address)) return { title: `not found \u00b7 ${brand.name}` }
 	try {
-		const snap = await readSnapshot(address as Address)
+		const snap = await readSnapshot(address as `0x${string}`)
+		const title = `${snap.question} \u00b7 ${formatBps(snap.impliedBps)}`
 		return {
-			title: snap.question,
-			description: `${formatBps(snap.impliedBps)} implied · ${brand.tagline}`,
-			openGraph: {
-				title: snap.question,
-				description: `${formatBps(snap.impliedBps)} implied probability of yes`,
-				images: [{ url: `/api/og/${address}`, width: 1200, height: 630 }],
-			},
-			twitter: { card: "summary_large_image" as const, images: [`/api/og/${address}`] },
+			title,
+			description: brand.tagline,
+			// The card carries the price and both clocks, so a link pasted into a
+			// group chat is itself an advert for a market that is open right now.
+			openGraph: { title, images: [{ url: `/api/og/${address}`, width: 1200, height: 630 }] },
+			twitter: { card: "summary_large_image", title },
 		}
 	} catch {
-		return { title: "Market" }
+		return { title: brand.name }
 	}
 }
 
@@ -48,46 +47,49 @@ export default async function MarketPage({ params }: Params) {
 
 	let snap
 	try {
-		snap = await readSnapshot(address as Address)
+		snap = await readSnapshot(address as `0x${string}`)
 	} catch {
-		// An address that is well-formed but not a market is a 404, not a stack trace.
+		// An address that is well-formed but is not one of our markets is a 404,
+		// not a crash.
 		notFound()
 	}
 
-	/*
-	 * The live surface is resolved HERE, on the server, for two reasons.
-	 *
-	 *   1. resolvingStartsAt gates tradeability (§3.4), so it has to be in the HTML
-	 *      with the first paint rather than arriving a second later. Otherwise there
-	 *      is a window in which the ticket looks open on a market that is shut.
-	 *   2. Both sources -- the indexer row and the committed template -- are
-	 *      server-side. The browser never learns STREAMS_API_URL.
-	 *
-	 * null is a real state, not a failure: §3.2 says a market without a stream row
-	 * should never have got past /admin, and the room says so plainly.
-	 */
-	let streamMeta: StreamMeta | null = null
+	let streamMeta = null
 	try {
 		streamMeta = await getStreamMeta({
-			address: address as Address,
+			address: address as `0x${string}`,
 			question: snap.question,
 			openUntil: snap.openUntil,
 		})
 	} catch {
-		// A stream row that cannot be read must never 500 a live market page.
+		// The stream registry is off-chain and optional. A market with no live
+		// surface is still perfectly tradeable, so this must never 500 the page.
 		streamMeta = null
 	}
 
 	return (
-		<ToastProvider>
-			<MarketRoom
-				address={address as Address}
-				initialQuestion={snap.question}
-				initialPhase={snap.phase}
-				initialOpenUntil={snap.openUntil}
-				initialResolveAfter={snap.resolveAfter}
-				streamMeta={streamMeta}
-			/>
-		</ToastProvider>
+		<div className="theme-ink">
+			<AppNav />
+			<ToastProvider>
+				<MarketRoom
+					address={address as `0x${string}`}
+					initialQuestion={snap.question}
+					initialPhase={snap.phase}
+					initialOpenUntil={snap.openUntil}
+					initialResolveAfter={snap.resolveAfter}
+					initialImpliedBps={snap.impliedBps.toString()}
+					initialLevels={snap.levels.map((l) => ({
+						openYes: l.openYes.toString(),
+						openNo: l.openNo.toString(),
+						matched: l.matched.toString(),
+					}))}
+					/* The server's clock, so the tradeability gate cannot be moved by a
+					   device with a wrong one. */
+					serverNow={Date.now()}
+					streamMeta={streamMeta}
+					chrome={false}
+				/>
+			</ToastProvider>
+		</div>
 	)
 }

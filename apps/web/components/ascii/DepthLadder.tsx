@@ -1,164 +1,225 @@
 "use client"
 
-import { useMemo, useRef } from "react"
+import { useEffect, useRef } from "react"
 
-import { NUM_TICKS, formatBps, formatWad, price, tickForBps, type TickLevel } from "../../lib/market-math"
+import { PHASE } from "../../lib/abi"
+import { NUM_TICKS, formatBps, formatWad, legPrice, price, type TickLevel } from "../../lib/market-math"
 
 /**
- * The book, as a depth ladder.
+ * Nineteen prices, both sides, and one gesture to trade any of them.
  *
- * Design decisions that matter here:
- *   - 19 ticks is too many to show at once and reads as noise. Show ticks that
- *     have volume, plus a two-tick window either side of the implied price, so
- *     there is always somewhere to place the first order in an empty book.
- *   - Bars are drawn in whole characters. A bar that eases between widths implies
- *     the fill was gradual; fills are atomic.
- *   - A row is a control. Clicking it loads that tick into the order ticket,
- *     because the sentence "I want this price" should be one gesture.
- *   - YES and NO get the two spot colours and nothing else does, so colour always
- *     means side.
+ * WHAT CHANGED AND WHY
+ *
+ * The ladder used to be a read-only rendering with a row-level onPickTick. That
+ * had two problems, one of interaction and one of information:
+ *
+ *   INTERACTION. Picking a row told the ticket a price but not a side, so the
+ *   user still had to reach over to a yes/no toggle to finish the thought. On a
+ *   market that lives sixty seconds, a two-gesture order is a missed round. Now
+ *   every size cell is its own button: the cell you touch IS the order you get,
+ *   because a cell already encodes both facts.
+ *
+ *   INFORMATION. Your own resting orders were invisible, so 40 shares at 0.55
+ *   looked identical whether they were yours or a stranger's. You could not tell
+ *   whether to cancel, or whether you were about to queue behind yourself. Own
+ *   size now carries a marker.
+ *
+ * The marker is a real character in a real cell, NOT inside a <pre>. Box-drawing
+ * and shape glyphs inside preformatted blocks are exactly what produced the
+ * ragged right edge this project already fixed once: a monospace advance is not
+ * an integer number of pixels, so 170 columns of asserted width drift about
+ * 34px. The ladder is a <table> for that reason -- the browser measures, we do
+ * not assert.
  */
 
+/** Bar width in cells. Fixed so every row measures against the same ruler. */
 const BAR_CELLS = 14
 
 export type DepthLadderProps = {
 	levels: readonly TickLevel[]
 	impliedBps: bigint
 	selectedTick?: number
-	onPickTick?: (tick: number) => void
-	/** disable interaction once trading has closed */
+	/** true = yes, false = no. Drives which cell reads as chosen. */
+	selectedSide?: boolean
+	/** the cell you touched is the order you get: both price and side */
+	onPick?: (tick: number, isYes: boolean) => void
 	interactive?: boolean
+	phase?: number
+	/** your resting size by tick, per side, from lib/orders.ts */
+	mineYes?: readonly bigint[]
+	mineNo?: readonly bigint[]
+	/** ticks that just filled, for the 180ms flash */
+	flashTicks?: readonly number[]
 }
 
-function bar(value: bigint, max: bigint, cells = BAR_CELLS): string {
-	if (max <= 0n) return ""
-	// integer maths, then floor: a bar never rounds itself up into looking deeper
-	// than the book actually is
-	const n = Number((value * BigInt(cells)) / max)
-	return "█".repeat(Math.max(value > 0n ? 1 : 0, Math.min(cells, n)))
+function bar(size: bigint, max: bigint): string {
+	if (max <= 0n || size <= 0n) return ""
+	// Floor, never round: a bar that shows one cell for a size of zero is a lie,
+	// and rounding up is how that happens.
+	const cells = Number((size * BigInt(BAR_CELLS)) / max)
+	return "\u2588".repeat(Math.max(0, Math.min(BAR_CELLS, cells)))
 }
 
 export function DepthLadder({
 	levels,
 	impliedBps,
 	selectedTick,
-	onPickTick,
-	interactive = true,
+	selectedSide,
+	onPick,
+	interactive = false,
+	phase = PHASE.Open,
+	mineYes,
+	mineNo,
+	flashTicks,
 }: DepthLadderProps) {
-	// Remember the previous depth per tick so a change can flash exactly one cell
-	// rather than re-animating the whole ladder.
-	const prev = useRef<Map<number, string>>(new Map())
+	// Remembering the previous book lets a row flash on change even when the
+	// server did not tell us which ticks moved.
+	const prev = useRef<readonly TickLevel[]>(levels)
+	useEffect(() => {
+		prev.current = levels
+	}, [levels])
 
-	const { rows, max, isEmpty } = useMemo(() => {
-		const mid = tickForBps(impliedBps)
-		const keep = new Set<number>()
-		for (let i = 0; i < NUM_TICKS; i++) {
-			const l = levels[i]
-			const hasVolume = l ? l.openYes > 0n || l.openNo > 0n || l.matched > 0n : false
-			if (hasVolume) keep.add(i)
-		}
-		const empty = keep.size === 0
-		// always leave a landing strip around the implied price
-		for (let d = -2; d <= 2; d++) {
-			const t = mid + d
-			if (t >= 0 && t < NUM_TICKS) keep.add(t)
-		}
+	if (!levels || levels.length === 0) {
+		// A market with no orders is a normal state, not an error. Say what will
+		// happen rather than rendering nineteen rows of zeroes.
+		return (
+			<div className="panel">
+				<div className="panel-head">
+					<span className="label">the book</span>
+					<span className="label">empty</span>
+				</div>
+				<div className="panel-body">
+					<p className="label" style={{ margin: 0, lineHeight: 1.6 }}>
+						no orders yet. the first order sets the price, and anything that crosses it matches on the next
+						block.
+					</p>
+				</div>
+			</div>
+		)
+	}
 
-		const list = [...keep].sort((a, b) => b - a) // high price at the top, like every book
-		let m = 0n
-		for (const t of list) {
-			const l = levels[t]
-			if (!l) continue
-			if (l.openYes > m) m = l.openYes
-			if (l.openNo > m) m = l.openNo
-			if (l.matched > m) m = l.matched
-		}
-		return { rows: list, max: m, isEmpty: empty }
-	}, [levels, impliedBps])
+	const maxOpen = levels.reduce((m, l) => {
+		const v = l.openYes > l.openNo ? l.openYes : l.openNo
+		return v > m ? v : m
+	}, 1n)
+
+	const nearest = Number(impliedBps / 500n)
+
+	// Nineteen rows is too many to read at a glance, so the ladder shows the
+	// neighbourhood of the market -- but a tick where YOU have size is never
+	// hidden, or the cancel affordance would vanish exactly when it is needed.
+	const visible: number[] = []
+	for (let t = 0; t < Math.min(NUM_TICKS, levels.length); t++) {
+		const mine = (mineYes?.[t] ?? 0n) > 0n || (mineNo?.[t] ?? 0n) > 0n
+		const busy = levels[t].openYes > 0n || levels[t].openNo > 0n || levels[t].matched > 0n
+		if (mine || busy || Math.abs(t - nearest) <= 4 || t === selectedTick) visible.push(t)
+	}
+
+	const canTrade = interactive && phase === PHASE.Open
 
 	return (
 		<div className="panel">
 			<div className="panel-head">
-				<span className="label">Book</span>
-				<span className="label">
-					implied <span style={{ color: "var(--fg)" }}>{formatBps(impliedBps)}</span>
-				</span>
+				<span className="label">the book</span>
+				<span className="label">{canTrade ? "tap a size to take that side at that price" : "read only"}</span>
 			</div>
 
-			{isEmpty ? (
-				<div className="panel-body">
-					{/*
-					  The empty book is the state a new market spends its first seconds in,
-					  and the state a demo is most likely to be caught in. It gets a real
-					  design, not a spinner: it explains what happens next and invites the
-					  first order.
-					*/}
-					<div className="ascii muted" aria-hidden="true" style={{ marginBottom: "var(--s3)" }}>
-						{"┌" + "─".repeat(34) + "┐\n"}
-						{"│" + " ".repeat(34) + "│\n"}
-						{"│   no orders resting yet          │\n"}
-						{"│   the first quote sets the price │\n"}
-						{"│" + " ".repeat(34) + "│\n"}
-						{"└" + "─".repeat(34) + "┘"}
-					</div>
-					<p className="muted" style={{ margin: 0, fontSize: "var(--t-small)" }}>
-						Pick a price below and place the first order. Until someone quotes both sides, the
-						implied probability is a coin flip.
-					</p>
+			{phase === PHASE.Locked ? (
+				<div className="panel-body" style={{ borderBottom: "1px solid var(--line)" }}>
+					<span className="label">locked \u00b7 matching</span>
 				</div>
 			) : null}
 
-			<table className="table">
-				<thead>
-					<tr>
-						<th>Price</th>
-						<th className="r">Yes</th>
-						<th>Depth</th>
-						<th className="r">No</th>
-						<th className="r">Matched</th>
-					</tr>
-				</thead>
-				<tbody>
-					{rows.map((t) => {
-						const l = levels[t] ?? { openYes: 0n, openNo: 0n, matched: 0n }
-						const yesBar = bar(l.openYes, max)
-						const noBar = bar(l.openNo, max)
-						const sig = `${l.openYes}:${l.openNo}:${l.matched}`
-						const changed = prev.current.has(t) && prev.current.get(t) !== sig
-						prev.current.set(t, sig)
+			<div className="panel-body">
+				<table className="table ascii-selectable" style={{ width: "100%" }}>
+					<thead>
+						<tr>
+							<th className="r">yes</th>
+							<th className="r">depth</th>
+							<th style={{ textAlign: "center" }}>price</th>
+							<th>depth</th>
+							<th>no</th>
+							<th className="r">matched</th>
+						</tr>
+					</thead>
+					<tbody>
+						{visible.map((t) => {
+							const l = levels[t]
+							const myYes = mineYes?.[t] ?? 0n
+							const myNo = mineNo?.[t] ?? 0n
+							const flash = flashTicks?.includes(t) ?? false
+							const isNearest = t === nearest
 
-						const selected = selectedTick === t
-						return (
-							<tr
-								key={t}
-								onClick={interactive && onPickTick ? () => onPickTick(t) : undefined}
-								style={{
-									cursor: interactive && onPickTick ? "pointer" : "default",
-									background: selected ? "var(--bg-3, transparent)" : undefined,
-									outline: selected ? "1px solid var(--line)" : undefined,
-								}}
-							>
-								<td style={{ fontWeight: selected ? 700 : 400 }}>
-									{selected ? "› " : "  "}
-									{formatBps(price(t))}
-								</td>
-								<td className={`r yes${changed ? " flash" : ""}`}>
-									{l.openYes > 0n ? formatWad(l.openYes) : "·"}
-								</td>
-								<td className="ascii" style={{ padding: "2px var(--s3)" }}>
-									<span className="yes">{yesBar.padStart(BAR_CELLS, " ")}</span>
-									<span className="muted">{"│"}</span>
-									<span className="no">{noBar.padEnd(BAR_CELLS, " ")}</span>
-								</td>
-								<td className={`r no${changed ? " flash" : ""}`}>
-									{l.openNo > 0n ? formatWad(l.openNo) : "·"}
-								</td>
-								<td className="r muted">{l.matched > 0n ? formatWad(l.matched) : "·"}</td>
-							</tr>
-						)
-					})}
-				</tbody>
-			</table>
+							// One cell = one order. aria-label spells out the whole thing
+							// because "40" read aloud on its own means nothing.
+							const sizeCell = (isYes: boolean, size: bigint, mine: bigint) => {
+								const chosen = t === selectedTick && selectedSide === isYes
+								const label = `Buy ${isYes ? "yes" : "no"} at ${formatBps(legPrice(t, isYes))}`
+								const inner = (
+									<>
+										{size > 0n ? formatWad(size) : "\u00b7"}
+										{mine > 0n ? (
+											<span
+												style={{ color: "var(--accent)", marginLeft: "0.35em" }}
+												title={`${formatWad(mine)} of this is yours`}
+											>
+												{"\u25cf"}
+											</span>
+										) : null}
+									</>
+								)
+								return (
+									<td className={`num ${isYes ? "yes" : "no"}${flash ? " flash" : ""}`} style={{ textAlign: isYes ? "right" : "left" }}>
+										{canTrade && onPick ? (
+											<button
+												type="button"
+												className="btn btn-ghost"
+												aria-label={label}
+												aria-pressed={chosen}
+												onClick={() => onPick(t, isYes)}
+												style={{
+													width: "100%",
+													padding: "0 var(--s2)",
+													textAlign: isYes ? "right" : "left",
+													borderColor: chosen ? "var(--accent)" : "transparent",
+													fontVariantNumeric: "tabular-nums",
+												}}
+											>
+												{inner}
+											</button>
+										) : (
+											inner
+										)}
+									</td>
+								)
+							}
+
+							return (
+								<tr key={t} style={isNearest ? { background: "var(--bg-3)" } : undefined}>
+									{sizeCell(true, l.openYes, myYes)}
+									<td className="r yes" style={{ letterSpacing: "-0.05em" }}>
+										{bar(l.openYes, maxOpen)}
+									</td>
+									<td className="num" style={{ textAlign: "center", fontWeight: isNearest ? 500 : 400 }}>
+										{formatBps(price(t))}
+									</td>
+									<td className="no" style={{ letterSpacing: "-0.05em" }}>
+										{bar(l.openNo, maxOpen)}
+									</td>
+									{sizeCell(false, l.openNo, myNo)}
+									<td className="r num muted">{l.matched > 0n ? formatWad(l.matched) : "\u00b7"}</td>
+								</tr>
+							)
+						})}
+					</tbody>
+				</table>
+
+				{mineYes || mineNo ? (
+					<p className="label" style={{ marginTop: "var(--s3)", marginBottom: 0 }}>
+						<span style={{ color: "var(--accent)" }}>{"\u25cf"}</span> marks size that is yours
+					</p>
+				) : null}
+			</div>
 		</div>
 	)
 }
