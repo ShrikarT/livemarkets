@@ -1,175 +1,336 @@
-# LiveMarkets
+# LIVEMARKETS
 
-**Sixty-second onchain prediction markets on Monad.** One question, nineteen independent price-tick shards, no shared counters — so the whole book can be matched in parallel.
+**Sixty seconds. One question. Onchain.**
 
-```
-      one question              nineteen shards                 one settlement
+A prediction market that opens, fills and settles inside a minute, on Monad
+testnet. Nineteen price levels, a real order book, and a livestream next to it.
 
-                          ┌─ 0.05 ─┐ openYes  openNo  matched ┐
-                          ├─ 0.10 ─┤ openYes  openNo  matched │
-   "Boundary this  ───────┼─ 0.15 ─┤ openYes  openNo  matched │
-    over?"                │   ⋮    │    ⋮       ⋮       ⋮     ├──▶  yes / no / void
-                          ├─ 0.85 ─┤ openYes  openNo  matched │
-                          ├─ 0.90 ─┤ openYes  openNo  matched │
-                          └─ 0.95 ─┘ openYes  openNo  matched ┘
-
-                          ┗━━━━━━ 19 concurrent matchTick() txs ━━━━━━┛
-```
-
-A round is 45 seconds open, 60 seconds to settlement. Anyone can take a side at one of nineteen prices, 0.05 through 0.95. A YES and a NO resting at the same price have posted exactly 1.00 between them, which is exactly what the pair pays out — so matching them is pure bookkeeping, permissionless, and pays the matcher 10% of the fee on whatever they match. Winners take 1.00 per share minus a 1% fee. VOID refunds both legs at the traded price and charges nothing at all.
-
-## Why the book is sharded by price
-
-One shared order book is one contended storage slot. Two people filling completely unrelated prices still write the same length counter, the same volume total, the same fee accumulator — so a chain that executes transactions in parallel has to detect the conflict and serialise them anyway. The parallelism is real at the VM level and thrown away at the application level.
-
-So there is no shared book here. Each of the nineteen ticks is its own `struct Tick` with its own resting YES total, resting NO total, matched total, fee accumulator, crank accumulator and two cursors. `matchTick(3, ...)` and `matchTick(11, ...)` touch disjoint storage and cannot conflict, so nineteen of them can land in the same block. Nothing in `Market.sol` writes a global counter, a running total or a shared array on the trading path — that absence is the whole design, and it is why history lives in the optional indexer instead of onchain.
-
-## Status
-
-| | where | state |
-| --- | --- | --- |
-| web app | not deployed from this build environment | run it locally, `npm run dev` |
-| contracts | `packages/contracts/deployments/10143.json` | placeholder zero addresses until you deploy |
-| chain | Monad testnet, id `10143` | 300–400 ms blocks, ~600–800 ms finality |
-| resolution | one resolver key | v1 — see [Trust](#trust-and-limitations) |
-
-No URL and no contract address is invented anywhere in this repo. After `npm run deploy`, fill this in from the file the deploy script writes:
-
-| contract | address | verify |
-| --- | --- | --- |
-| `MarketFactory` | — | `https://testnet.monadexplorer.com/address/<addr>` |
-| `Series` (per question) | — | same |
-| `NaiveBook` (benchmark baseline) | — | same |
+---
 
 ## Run it
 
 ```bash
-git clone https://github.com/ShrikarT/livemarkets.git
+git clone https://github.com/ShrikarT/livemarkets
 cd livemarkets
 npm i
-npm run dev          # http://localhost:3000
+npm run dev
 ```
 
-The app works with an empty deployment file: factory reads are wrapped and the pages render designed empty states rather than crashing. Test MON comes from <https://faucet.monad.xyz>.
+**No environment variables required.** With an empty `.env` the app runs in watch
+mode: it reads the public Monad testnet RPC, renders live books, and shows every
+price and clock. Sign-in and the faucet hide themselves rather than throwing, so
+a fresh clone is never a wall of red.
 
-To put it on chain and keep it running:
+What you get with no config, and what each variable unlocks:
+
+| Variable | Without it | With it |
+| --- | --- | --- |
+| `NEXT_PUBLIC_MONAD_RPC_URL` | public `testnet-rpc.monad.xyz` | your own RPC (recommended — the public one rate-limits) |
+| `NEXT_PUBLIC_MONAD_EXPLORER` | `testnet.monadexplorer.com` | your explorer |
+| `NEXT_PUBLIC_PRIVY_APP_ID` | watch mode: read everything, sign nothing | passkey / email / Google / wallet sign-in |
+| `NEXT_PUBLIC_MULTICALL3` | reads go one at a time | batched reads |
+| `FAUCET_PRIVATE_KEY` | `/api/faucet` returns 503 and the button hides | in-app testnet drip |
+| `UPSTASH_REDIS_REST_URL` + `_TOKEN` | faucet guards fall back to in-process, waitlist is ephemeral | durable one-drip-per-address and daily caps |
+| `IP_HASH_SALT` | IPs hashed with a default salt | your salt |
+| `STREAMS_API_URL` | market rooms say “no live surface for this market” | livestream metadata per market |
+
+Copy `.env.example` to `.env.local` and fill in only what you need.
+
+> **One manual step for the visuals.** `apps/web/public/plates/` holds six
+> AVIF/WebP background plates that are binary and cannot be pushed through the
+> GitHub contents API. Copy them in from the release zip. Without them the hero
+> renders with no background plate — the `<img>` is `alt=""` and `aria-hidden`,
+> so it degrades cleanly rather than breaking.
+
+---
+
+## The idea
+
+### A book sharded by price
+
+A normal order book is one sorted list. One sorted list is one hot storage slot:
+every fill rewrites the same head pointer, so transactions queue no matter how
+parallel the chain is. The contention is in the data structure, not the chain.
+
+So there is no shared list. Each of the nineteen ticks is its own struct with its
+own resting size, matched total, fee accumulator and cursor:
+
+```text
+   one question            nineteen shards            one settlement
+
+                    +-- 0.05 --+ openYes openNo matched +
+                    |-- 0.10 --| openYes openNo matched |
+ "Boundary in the --+-- 0.15 --| openYes openNo matched |
+  next over?"       |    :     |    :       :      :    +--> yes / no / void
+                    |-- 0.90 --| openYes openNo matched |
+                    +-- 0.95 --+ openYes openNo matched +
+
+                    |===== 19 concurrent matchTick() txs =====|
+```
+
+`matchTick(4)` and `matchTick(17)` share no storage, so Monad's scheduler runs
+them in the same block. That is the entire design, and it is why a market can
+open, fill across every level and settle inside sixty seconds.
+
+### Why the clock is the authority, not the picture
+
+Broadcast HLS runs 15–45 seconds behind. Low-latency Twitch is 3–5. Somebody in
+the stadium is at zero, and a scoring API can be *ahead* of all of them. If the
+market were about something already visible on one of those feeds, whoever has
+the fastest one wins for free.
+
+Three rules fall out of that, and they are enforced in code:
+
+1. **Every market is about an interval that has not begun.** "Boundary in the
+   next over", not "was that a boundary".
+2. **The app clock is the only authority.** Two clocks — `ORDERS CLOSE` and
+   `RESOLVES` — appear on the list card, the strip, the market header and the OG
+   image.
+3. **Nothing is tradeable once the resolving interval has started**, even if
+   `openUntil` has not passed yet.
+
+The stream is never larger than 38% of the market room, never autoplays with
+sound, and carries a delay disclaimer under every embed.
+
+---
+
+## What is where
+
+```text
+apps/web/
+  app/
+    page.tsx                     landing — opens on a real live market
+    app/page.tsx                 /app — opens on a live market, not a menu
+    app/rounds/page.tsx          every round, grouped by what you can DO
+    app/portfolio/page.tsx       what you hold, what you can claim
+    app/leaderboard/page.tsx     who won, from settlement logs
+    app/m/[address]/page.tsx     the market room: stream + book + ticket
+    r/[address]/page.tsx         a result you can paste into a chat
+    admin/page.tsx               resolver console
+    api/
+      stream/[address]/route.ts  SSE — one poll loop per market
+      health/route.ts            poll loops, viewers, RPC calls/min
+      feed/[address]/route.ts    cached snapshot (SSE fallback)
+      faucet/route.ts            guarded testnet drip
+      og/[address]/route.tsx     market share card
+      og/result/[address]        result share card
+  lib/
+    market-math.ts               wei-exact mirror of the contract's arithmetic
+    settlement.ts                one answer to "what did this address get"
+    watcher.ts                   shared per-market poll loop
+    live.ts                      client SSE hook with polling fallback
+    orders.ts                    your resting orders, without 38 calls/sec
+    leaderboard.ts               aggregates Claimed / CrankRewardPaid logs
+    market-client.ts             viem reads
+packages/contracts/src/
+  Market.sol                     the sharded book
+  MarketFactory.sol              deployment + discovery
+  Series.sol                     perpetual rounds
+```
+
+---
+
+## Numbers that must agree
+
+`lib/market-math.ts` is a **wei-exact mirror** of the cost, payout and refund
+arithmetic in `Market.sol`. The rule it exists to enforce:
+
+> The number in the order ticket must equal the number the contract charges, to
+> the wei.
+
+It is all `bigint`, no floats anywhere near collateral, and every debit rounds
+**up** while every credit rounds **down** — the same direction as the contract.
+`lib/market-math.test.ts` checks it against vectors generated from the contract
+itself:
 
 ```bash
-cp .env.example .env     # DEPLOYER_PRIVATE_KEY, RESOLVER_ADDRESS, FEE_RECIPIENT, ...
-npm run deploy           # forge script; writes packages/contracts/deployments/10143.json
-npm run crank            # permissionless matcher + series poker + house maker
-npm run index            # optional: postgres history, needs DATABASE_URL
-npm test                 # forge tests + math parity + python model
+cd apps/web && npm test
 ```
 
-Three separate keys on purpose: `CRANK_PRIVATE_KEY` is hot and worthless, `MAKER_PRIVATE_KEY` carries risk capital, and only `RESOLVER_PRIVATE_KEY` is privileged. A leaked cranker key costs a few cents of gas, not the ability to settle a market you are trading.
+`lib/settlement.ts` is the single place that answers *what did this address get
+out of this market*. The share card, the result page and the portfolio all fold
+through it, because three surfaces quoting three slightly different numbers for
+the same position is how a product loses the benefit of the doubt on money. The
+fee is applied **per tick**, not once on a total, because `Market.claim` branches
+per tick and rounds each fee down.
 
-## The benchmark
+### The dust, and why there is no sweep
 
-`npm run bench` fills all nineteen levels four different ways against a live RPC and writes the numbers into `apps/web/config/bench.ts`, which ships with `measured: false` until someone does.
+Rounding up on debits and down on credits leaves a residue of roughly **32 wei**
+per fully-cycled market. That is intentional and it is documented rather than
+collected. A sweep function is a privileged transfer path — more attack surface,
+more audit burden, one more thing that can be pointed at the wrong address —
+bought for a value that will never exceed a rounding error. It stays.
 
-| run | what it does | transactions |
-| --- | --- | --- |
-| A · sequential | `matchTick(i)` per level, each awaited before the next | 19, serialised by the client |
-| B · parallel | same 19 calls, one nonce fetch, all sent at once | 19, concurrent |
-| C · batched | one `matchTicks([0..18])` call | 1 |
-| D · naive baseline | `NaiveBook.matchAll()`, a deliberately shared book | 1, fully serialised inside |
+---
 
-`bench/NaiveBook.sol` exists to lose. It keeps one global order count and one running total, exactly like a normal single-book design, so the comparison measures the sharding rather than the compiler. Do not "fix" it.
+## One poll loop per market, not one per viewer
 
-What is true without running the benchmark, by reading the source: 19 ticks, 4 storage slots touched per tick on the match path, 0 slots shared between ticks.
+The first version of `/api/stream` polled the chain once per connected visitor.
+Ten people watching one market meant ten identical `eth_call` loops: about
+**300 RPC calls a minute** to learn the same thing ten times.
 
-## What was actually run
+`lib/watcher.ts` now keeps one loop per *market* and fans out to subscribers. Ten
+viewers cost the same as one. Per-connected-trader polling for your own resting
+orders is separate and much cheaper, because `lib/orders.ts` does one sweep of
+the nineteen ticks and then watches only the ticks you actually have something
+at, instead of re-reading all thirty-eight legs on a timer.
 
-The Python reference model in `packages/contracts/sim/` reimplements `Market.sol` wei-for-wei, including `mulDivUp` on every debit and `mulDivDown` on every credit, and then a fuzzer beats on it. `cd packages/contracts/sim && python3 fuzz.py 400 300`:
+You can watch this working:
 
-```
-worked example
-  YES    alice_net= 59.40  bob_net=  0.00  refund=26.00  dust=0wei
-  NO     alice_net=  0.00  bob_net= 59.40  refund=26.00  dust=0wei
-  VOID   alice_net= 39.00  bob_net= 21.00  refund=26.00  dust=0wei
-rounding edges
-  rounding: mulDivUp keeps 1-wei pairs solvent at all 19 ticks (mulDivDown does not)
-  refunds: exact to the wei on partially filled orders
-fuzzing 400 runs x 300 actions
-  orders placed        43,260
-  cranks               23,959
-  cancels              14,154
-  shares matched     4,250.09
-  expected reverts     10,921
-  outcomes         {'YES': 126, 'NO': 128, 'VOID': 146}
-  collateral settled    41,057.48
-  rounding dust left after full drain: 12947 wei across 400 markets
-ALL INVARIANTS HELD
+```bash
+curl -s localhost:3000/api/health | jq
 ```
 
-12,947 wei of dust across 400 fully drained markets — about a hundredth of a cent — all of it rounding that favours the contract, never a user.
-
-The browser does its own arithmetic, so `apps/web/lib/market-math.ts` mirrors the contract in `bigint` and is tested against the same vectors. `cd apps/web && node --test lib/market-math.test.ts`:
-
-```
-tests 16
-pass 16
-fail 0
-```
-
-`packages/contracts/test/Vectors.t.sol` closes the loop the other way: 9,120 committed cost vectors generated from the TypeScript, asserted against the Solidity, so the UI and the chain can never quietly disagree about what an order costs.
-
-## Three bugs in the original spec
-
-1. **`matchTick` was callable after resolution.** Once the outcome was known, anyone could still pair off a resting order at a price that was no longer a guess. It now reverts `AlreadyResolved()`; `test_no_matching_after_resolve` and the fuzzer both assert it.
-2. **A global `feesAccrued` slot quietly broke the parallelism thesis.** Every `claim()` wrote one shared counter, so the nineteen shards reconverged on a single hot slot at settlement. Fees now accumulate per tick in `Tick.feeAcc`, and VOID takes no fee at all.
-3. **`Series.poke()` drifted.** `nextStart = now + roundSeconds` pushed every future round later by however long the poke was late, so a series slipped minutes per hour. It now advances from the previous scheduled slot and resyncs after an outage — `test_series_schedule_does_not_drift` and `test_series_catches_up_after_long_outage`.
-
-## Beyond the spec
-
-- **`snapshot(who)`** returns the question, phase, outcome, both deadlines, implied price, the caller's balance, all nineteen levels and both position arrays in one `eth_call`. The trading room is one read, not twenty.
-- **`matchTicks(list)`** and **`withdrawOrdersAt(tick, side)`** for callers who would rather pay once, without giving up the per-tick path that makes parallel matching possible.
-- **Crank rewards are sharded too** — accrued per tick and paid to the address that actually did the matching.
-- **A house maker** (`apps/cranker/src/house-maker.ts`) that quotes both legs so the first trader in a round has something to trade against, with per-round exposure and daily-loss caps checked before every order, on its own key.
-- **An oracle that refuses to guess** (`apps/cranker/src/oracle.ts`): it settles only questions it can prove from chain data and returns `null` for everything else, which routes them to a human. A bot that guesses once, wrongly, destroys the only thing a prediction market sells.
-- **A resolver console** (`/admin`) gated by the chain rather than an env allowlist, that makes you type the outcome word before it will submit, and that says "this is the centralisation risk" on the panel itself.
-- **A faucet route** with five separate guards, and a `text/event-stream` book feed with heartbeats and a hard lifetime instead of a websocket that quietly dies.
-- **A generated OG card** per market, cached for 5 seconds while live and immutably once settled.
-- **An ASCII design system** — a real cell grid, an interference-field hero, a depth ladder drawn in box characters — previewable with no build step at all.
-
-## Repo layout
-
-```
-packages/contracts/
-  src/Market.sol            the price-tick sharded book
-  src/MarketFactory.sol     deploys markets, holds fee config
-  src/Series.sol            drift-free recurring rounds, permissionless poke
-  bench/NaiveBook.sol       the deliberate serialiser, for comparison
-  test/                     unit, invariant and cost-vector suites
-  sim/                      python reference model + invariant fuzzer
-apps/web/                   Next app: /, /app, /app/m/[address], /admin, api routes
-apps/cranker/               matcher, series poker, house maker, oracle
-apps/indexer/               optional postgres history and leaderboard
-scripts/bench.ts            the A/B/C/D harness
-design/preview/             static previews that link the real globals.css
+```json
+{
+  "ok": true,
+  "pollLoops": 1,
+  "viewers": 7,
+  "viewersPerPollLoop": 7,
+  "pollIntervalMs": 500,
+  "rpcCallsPerMinute": 120
+}
 ```
 
-There is no portfolio page. The routes above are all of them.
+If `viewersPerPollLoop` is ever `1` with several viewers on one market, the
+sharing is broken.
 
-## Not committed
+---
 
-Four artefacts are generated, not authored, so they are not in git:
+## The leaderboard is not a counter
 
-| missing | regenerate with |
+`/app/leaderboard` reads `Claimed` and `CrankRewardPaid` **logs**. The shortcut
+would be to POST "I won" to a KV counter when a claim succeeds — which produces a
+board anyone can forge with `curl`. That is worse than having no board, because
+it invites people to trust a number that is not true.
+
+Two honest limits, both stated on the page itself:
+
+- It is labelled **winnings, not profit.** Ranking by net claimed rewards volume
+  as much as skill. True P&L needs the cost basis of every fill, which means
+  replaying `Matched` against per-order prices — an indexer's job.
+- It covers a **window**, not all time. It asks for ~20,000 blocks (about two
+  hours at 400ms) and halves the range if the RPC refuses, then reports the
+  window it actually got.
+
+---
+
+## Contracts
+
+```bash
+cd packages/contracts
+forge build
+forge test
+```
+
+`lib/forge-std` is vendored as committed files, not a submodule, so a fresh clone
+builds without `git submodule update`.
+
+Deploy and register a series:
+
+```bash
+forge script script/Deploy.s.sol \
+  --rpc-url $MONAD_RPC_URL \
+  --private-key $DEPLOYER_KEY \
+  --broadcast
+```
+
+Addresses are read from `packages/contracts/deployments/10143.json`, and
+`config/contracts.ts` throws on a chain-id mismatch rather than silently pointing
+the UI at the wrong network.
+
+Verify:
+
+```bash
+forge verify-contract <address> src/MarketFactory.sol:MarketFactory \
+  --chain-id 10143 --verifier sourcify --watch
+```
+
+### Three bugs that are fixed and must stay fixed
+
+There are regression tests for each of these. If you refactor `Market.sol`, keep
+them passing:
+
+1. **Matching after resolution reverts.** It used to silently no-op, which meant a
+   cranker could burn gas for nothing after settlement.
+2. **The fee accumulator is per tick, not one global slot.** A single global fee
+   slot re-introduces exactly the write contention the sharding exists to remove.
+3. **`Series` schedules from the previous scheduled slot**, not from `block.timestamp`.
+   Scheduling from "now" makes rounds drift a little later every time.
+
+There is also a Python reference model and a fuzz harness in
+`packages/contracts/sim` — the model is the arbiter when Solidity and TypeScript
+disagree about a number.
+
+---
+
+## Benchmark
+
+The landing page has a latency table that is **empty until someone runs it**:
+
+```bash
+npx tsx scripts/bench.ts
+```
+
+It fires nineteen `matchTick` transactions at a deployed market two ways — one at
+a time, then all at once with pre-computed nonces — and against `NaiveBook.sol`,
+the same market built on one shared list. It checks *work parity* first, so a
+fast run that matched less volume is reported as a failure rather than a win, and
+it writes its own results into `apps/web/config/bench.ts`. The page can therefore
+only ever show a real measurement.
+
+Publishing a number nobody measured is how benchmarks stop meaning anything.
+
+---
+
+## What you are trusting
+
+One key decides every outcome. `trust.stage` in `config/contracts.ts` is `"v1"`
+and the label is `"single resolver"`, and the UI is not allowed to imply anything
+stronger than whatever that config says. The resolver is a constructor argument
+rather than a hardcoded address, so replacing it does not need a new protocol.
+
+This is testnet. `brand.environmentLabel` — *beta · monad testnet · test funds
+only* — is rendered in the nav on every route, not in a modal somebody dismisses
+once.
+
+---
+
+## Verification status
+
+Being specific about this rather than implying a green build:
+
+| Checked | How |
 | --- | --- |
-| `packages/contracts/test/vectors/cost-vectors.json` | `cd packages/contracts && python3 sim/gen_vectors.py` |
-| `design/preview/landing.html`, `room.html` | `python3 design/preview/make_previews.py` |
-| `design/preview/*.png` | screenshot the two HTML files at 1440 wide |
-| `apps/web/config/bench.ts` numbers | `npm run bench` |
+| TypeScript across the web app | `npm run typecheck` |
+| Cost / payout / refund parity | `npm test` against contract-generated vectors |
+| Contracts compile and pass | `forge build && forge test` — **run this before deploying** |
+| Parallel-vs-sequential latency | `npx tsx scripts/bench.ts` — **unmeasured until you run it** |
 
-## Trust and limitations
+The web app's types are checked. The Solidity has **not** been recompiled since
+the most recent frontend work, because none of that work touched `Market.sol`.
+Run `forge build && forge test` before you deploy anything.
 
-**One key settles every market today.** That is the honest centralisation, and the app says so on the page where it matters. The roadmap is v1 single resolver → v2 3-of-5 committee behind a multisig → v3 optimistic resolution with a bond and a challenge window.
+---
 
-**Unaudited. Testnet only.** 1% fee on winnings, nothing on VOID, no upgrade path and no admin function except resolution and a trading pause.
+## Not built, on purpose
 
-**What has not been run.** The build environment for this repo had neither Foundry nor network access, so `forge build`, `forge test`, `npm i` and `next build` were never executed here. The three `.t.sol` suites, the cranker, the indexer and the API routes are therefore unverified by execution and un-type-checked. That gap is not theoretical: six real defects were found and fixed while transcribing this code into git — two invalid Solidity hex literals (`0xREE`, `0xCAR01`) that would not have compiled, two dead links to a page that does not exist, a countdown bar whose window arithmetic collapsed to `1` so it never depleted, an ASCII box one cell too wide, and a component destructuring a toast API that does not exist while rendering a second copy of every toast. Run the suites before trusting any of it with anything.
+Saying no is part of the design:
+
+- **No simulated, demo or offline mode.** If the chain is unreachable the UI says
+  so. A fake book that looks real is a worse bug than an error message.
+- **No parimutuel pool.** This is a nineteen-tick CLOB. You pick a price.
+- **No token, no leverage, no multi-outcome markets, more than nineteen ticks.**
+- **No dust sweep.** See above.
+- **No stream URL on chain.** Stream metadata is off-chain in the registry;
+  putting a URL in storage would make a broken link a permanent one.
+- **No external faucet link.** Sending a new user to a third-party site to solve
+  a captcha before they have seen a single price is the worst possible first step.
+  `/api/faucet` drips instead, guarded four ways: zero-balance only, one drip per
+  address ever, a per-IP rate limit, and a daily cap.
+
+---
 
 ## Licence
 
