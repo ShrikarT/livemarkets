@@ -68,7 +68,17 @@ export function OrderTicket({
 				? `minimum order is ${formatWad(MIN_SHARES, 4)} shares`
 				: null
 
-	const ready = open && shares > 0n && !q.tooSmall && !busy
+	/*
+	  canSign belongs in here, not only in the label.
+
+	  Watch mode is a first-class state: you can read the whole book, change sides
+	  and size an order without a wallet, and everything above stays interactive.
+	  But the submit button must not FIRE while it reads "sign in to trade". A
+	  button whose label is an instruction and whose action is an order sends a
+	  signed-out visitor into a transaction path they did not ask for, and the
+	  failure surfaces as a wallet error instead of an explanation.
+	*/
+	const ready = canSign && open && shares > 0n && !q.tooSmall && !busy
 
 	return (
 		<div className="panel">
@@ -165,6 +175,18 @@ export function OrderTicket({
 							? "sign in to trade"
 							: `Buy ${isYes ? "yes" : "no"} · ${formatWad(q.cost)} MON`}
 				</button>
+
+				{/*
+				  A disabled button that says "sign in" is only half an answer -- it names
+				  the blocker without saying where to clear it. Sign-in lives in the header,
+				  which renders on every /app surface, so point at it.
+				*/}
+				{!canSign ? (
+					<p className="label" style={{ margin: 0, lineHeight: 1.5 }}>
+						Watching. Sign in from the top right to place this order — the book, the clocks and this quote
+						stay live either way.
+					</p>
+				) : null}
 
 				<p className="label" style={{ margin: 0, lineHeight: 1.5 }}>
 					Limit order at one price. It rests until someone takes the other side, and you can
