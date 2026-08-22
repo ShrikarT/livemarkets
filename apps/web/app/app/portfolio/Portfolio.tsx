@@ -5,19 +5,19 @@ import { useCallback, useEffect, useState } from "react"
 import type { Address } from "viem"
 import { useAccount, useWriteContract } from "wagmi"
 
+import { protocol } from "../../../config/contracts"
 import { OUTCOME, PHASE, marketAbi } from "../../../lib/abi"
 import { publicClient, readSnapshot, type MarketSnapshot } from "../../../lib/market-client"
 import { formatBps, formatWad, price } from "../../../lib/market-math"
+import { settlementOf, type Settlement } from "../../../lib/settlement"
 
 type Row = { tick: number; yes: bigint; no: bigint }
 
 type Holding = {
 	snap: MarketSnapshot
 	rows: Row[]
-	/** unclaimed winning SHARES, not MON -- see the note on the headline below */
-	winningShares: bigint
-	/** what you put in, at the price you paid */
-	staked: bigint
+	/** the one source of truth for what this position is worth */
+	s: Settlement
 }
 
 /** Read in small groups: 24 parallel RPC calls is how you get rate limited. */
@@ -44,28 +44,27 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 				// One unreachable market must not blank the whole page.
 				if (r.status !== "fulfilled") continue
 				const snap = r.value
+
 				const rows: Row[] = []
-				let staked = 0n
 				for (let t = 0; t < snap.yesPositions.length; t++) {
 					const yes = snap.yesPositions[t] ?? 0n
 					const no = snap.noPositions[t] ?? 0n
 					if (yes === 0n && no === 0n) continue
 					rows.push({ tick: t, yes, no })
-					const p = price(t)
-					// yes costs p, no costs 1 - p. Both legs at the tick's own price.
-					staked += (yes * p) / 10_000n + (no * (10_000n - p)) / 10_000n
 				}
 				if (rows.length === 0 && snap.balanceWei === 0n) continue
 
-				let winningShares = 0n
-				if (snap.phase === PHASE.Resolved) {
-					for (const row of rows) {
-						if (snap.outcome === OUTCOME.Yes) winningShares += row.yes
-						else if (snap.outcome === OUTCOME.No) winningShares += row.no
-						else if (snap.outcome === OUTCOME.Void) winningShares += row.yes + row.no
-					}
-				}
-				found.push({ snap, rows, winningShares, staked })
+				// One shared fold, so this page, the result page and the share card can
+				// never quote three different numbers for the same position.
+				const s = settlementOf({
+					outcome: snap.outcome,
+					phase: snap.phase,
+					yesPositions: snap.yesPositions,
+					noPositions: snap.noPositions,
+					feeBps: protocol.feeBps,
+				})
+
+				found.push({ snap, rows, s })
 			}
 		}
 		setHoldings(found)
@@ -106,7 +105,7 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 				</div>
 				<div className="panel-body">
 					<p className="label" style={{ margin: 0, lineHeight: 1.6 }}>
-						sign in to see your positions. watching a round never needs a wallet \u2014 only holding one does.
+						sign in to see your positions. watching a round never needs a wallet — only holding one does.
 					</p>
 				</div>
 			</div>
@@ -116,7 +115,7 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 	if (holdings === null) {
 		return (
 			<p className="label" style={{ marginTop: "var(--s5)" }}>
-				reading {addresses.length} rounds\u2026
+				reading {addresses.length} rounds…
 			</p>
 		)
 	}
@@ -139,21 +138,26 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 		)
 	}
 
-	const claimable = holdings.filter((h) => h.winningShares > 0n)
-	const totalWinning = claimable.reduce((s, h) => s + h.winningShares, 0n)
+	const claimable = holdings.filter((h) => h.s.settled && h.s.netWei > 0n)
+	const totalNet = claimable.reduce((s, h) => s + h.s.netWei, 0n)
 	const idle = holdings.reduce((s, h) => s + h.snap.balanceWei, 0n)
+	const realised = holdings.reduce((s, h) => s + h.s.pnlWei, 0n)
 
 	return (
 		<>
 			{/*
-			  THE HEADLINE IS SHARES, NOT MON, AND THAT IS ON PURPOSE.
+			  THE HEADLINE IS MON, AND IT IS ALLOWED TO BE.
 
-			  A winning share pays out one unit minus the fee on the winnings, and the
-			  exact figure depends on the contract's own rounding. Printing a
-			  confident MON total here would mean reimplementing that arithmetic in
-			  the browser and being wrong by dust -- and a portfolio that quotes you a
-			  number you do not receive is worse than one that quotes no number. The
-			  claim transaction reports the true amount.
+			  This used to read "winning shares" because quoting a MON figure meant
+			  reimplementing the contract's fee and rounding arithmetic in the browser
+			  and being wrong by dust -- and a portfolio that quotes a number you do
+			  not receive is worse than one that quotes no number.
+
+			  It is MON now because the arithmetic is no longer reimplemented. It goes
+			  through lib/settlement, which folds market-math's netPayout PER TICK --
+			  the same branch and the same round-down-per-tick that Market.claim uses.
+			  market-math is parity-tested against contract-generated vectors, so this
+			  is the contract's number, not an estimate of it.
 			*/}
 			<div
 				style={{
@@ -167,9 +171,9 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 			>
 				<div>
 					<div className="num" style={{ fontSize: "var(--t-h1)", lineHeight: 1 }}>
-						{formatWad(totalWinning)}
+						{formatWad(totalNet)}
 					</div>
-					<span className="label">winning shares to claim</span>
+					<span className="label">MON to claim, after fees</span>
 				</div>
 				<div>
 					<div className="num" style={{ fontSize: "var(--t-h3)", lineHeight: 1 }}>
@@ -177,6 +181,20 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 					</div>
 					<span className="label">rounds with a position</span>
 				</div>
+				{/* Realised result across settled rounds. Shown even when negative --
+				    a portfolio that can only display gains is not a portfolio. */}
+				{claimable.length > 0 || realised !== 0n ? (
+					<div>
+						<div
+							className={`num ${realised > 0n ? "yes" : realised < 0n ? "no" : ""}`}
+							style={{ fontSize: "var(--t-h3)", lineHeight: 1 }}
+						>
+							{realised > 0n ? "+" : ""}
+							{formatWad(realised)}
+						</div>
+						<span className="label">realised, settled rounds</span>
+					</div>
+				) : null}
 				{idle > 0n ? (
 					<div>
 						<div className="num" style={{ fontSize: "var(--t-h3)", lineHeight: 1 }}>
@@ -227,7 +245,7 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 												<td className="r num no">{r.no > 0n ? formatWad(r.no) : "\u00b7"}</td>
 												{settled ? (
 													<td className="r num">
-														{won > 0n ? <span className="yes">{formatWad(won)} won</span> : <span className="muted">\u2014</span>}
+														{won > 0n ? <span className="yes">{formatWad(won)} won</span> : <span className="muted">—</span>}
 													</td>
 												) : null}
 											</tr>
@@ -236,20 +254,41 @@ export function Portfolio({ addresses }: { addresses: string[] }) {
 								</tbody>
 							</table>
 
+							{/* Staked uses the contract's round-UP on debits. The previous version
+							    divided down here, which quietly understated what you paid. */}
 							<p className="label" style={{ marginTop: "var(--s3)" }}>
-								staked {formatWad(h.staked)} MON at the prices you paid
+								staked {formatWad(h.s.stakedWei)} MON at the prices you paid
+								{h.s.settled ? (
+									<>
+										{" \u00b7 "}
+										{formatWad(h.s.netWei)} back after {formatWad(h.s.feeWei)} fee{" \u00b7 "}
+										<span className={h.s.pnlWei > 0n ? "yes" : h.s.pnlWei < 0n ? "no" : "muted"}>
+											{h.s.pnlWei > 0n ? "+" : ""}
+											{formatWad(h.s.pnlWei)} MON
+										</span>
+									</>
+								) : null}
 							</p>
 
-							{h.winningShares > 0n || h.snap.balanceWei > 0n ? (
-								<button
-									className="btn btn-yes"
-									style={{ width: "100%" }}
-									disabled={busy === h.snap.address}
-									onClick={() => void collect(h.snap.address)}
-								>
-									{busy === h.snap.address ? "collecting\u2026" : "claim and withdraw"}
-								</button>
-							) : null}
+							<div style={{ display: "flex", gap: "var(--s3)", flexWrap: "wrap", alignItems: "center" }}>
+								{h.s.netWei > 0n || h.snap.balanceWei > 0n ? (
+									<button
+										className="btn btn-yes"
+										style={{ flex: 1, minWidth: "200px" }}
+										disabled={busy === h.snap.address}
+										onClick={() => void collect(h.snap.address)}
+									>
+										{busy === h.snap.address ? "collecting\u2026" : "claim and withdraw"}
+									</button>
+								) : null}
+								{/* A result is worth sharing whether it went your way or not, and
+								    the link renders its own card wherever it is pasted. */}
+								{h.s.settled && h.s.ticksHeld > 0 && account ? (
+									<Link className="btn btn-ghost" href={`/r/${h.snap.address}?who=${account}`}>
+										share this result
+									</Link>
+								) : null}
+							</div>
 						</div>
 					</div>
 				)
